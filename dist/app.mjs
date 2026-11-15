@@ -17,7 +17,7 @@ try{
   else{const legacy=JSON.parse(localStorage.getItem('flowstate.process.v1')||'null');const first=record(legacy?.version===1&&Array.isArray(legacy.nodes)?legacy:template('lab'));db={version:2,active:first.id,projects:[first]};}
 }catch{const first=record(template('lab'));db={version:2,active:first.id,projects:[first]};warning='Previous data could not be loaded';}
 let project=db.projects.find(p=>p.id===db.active),m=project.model,selected=m.nodes.find(n=>n.type==='processor'&&n.name==='Assembly')?.id??m.nodes[0]?.id;
-let past=[],future=[],result=null,worker=null,view='3d',cursor=0,playing=false,raf=0,lastPaint=0,noticeTimer,linkMode=false,linkFrom=null;
+let past=[],future=[],result=null,worker=null,view='2d',cursor=0,playing=false,raf=0,lastPaint=0,noticeTimer,linkMode=false,linkFrom=null;
 function notify(text){$('notice').textContent=text;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>$('notice').textContent='',4200);}
 function save(){try{localStorage.setItem(storageKey,JSON.stringify(db));warning='';}catch{warning='Storage full or unavailable · export project';} $('save').textContent=warning||'Saved on this device';}
 function modal(title,html){$('dialogtitle').textContent=title;$('dialogbody').innerHTML=html;if(!$('dialog').open)$('dialog').showModal();}
@@ -46,12 +46,13 @@ $('stationPick').onchange=()=>selectStation($('stationPick').value);
 function render(){
  const n=m.nodes.find(n=>n.id===selected)||m.nodes[0];selected=n?.id;
  $('title').textContent=m.title;$('category').textContent=m.category+' · Revision '+project.revision;$('save').textContent=warning||'Saved on this device';
- $('undo').disabled=!past.length;$('redo').disabled=!future.length;$('count').textContent=m.nodes.length+' stations · '+m.edges.length+' connections · '+normalizeProducts(m).length+' product'+(normalizeProducts(m).length===1?'':'s');
- $('stageStatus').textContent=result?.primary?'Event playback':'Factory floor';
+ const products=normalizeProducts(m);$('undo').disabled=!past.length;$('redo').disabled=!future.length;$('count').textContent=m.nodes.length+' stations · '+m.edges.length+' connections · '+products.length+' product'+(products.length===1?'':'s');
+ $('productLegend').innerHTML=products.map(p=>'<span title="'+escape(productRouteLabel(p.route))+'"><i class="swatch" style="background:'+escape(p.color)+'"></i>'+escape(p.name)+'</span>').join('');
+ $('stageStatus').textContent=result?.primary?'Event playback':view==='2d'?'2D model editor':'Factory floor';
  $('link').setAttribute('aria-pressed',String(linkMode));$('link').textContent=linkMode?'Cancel connect':'Connect';
  $('stationPick').innerHTML=m.nodes.map(s=>'<option value="'+escape(s.id)+'" '+(s.id===selected?'selected':'')+'>'+escape(s.name)+'</option>').join('');
  $('scrub').max=project.config.horizon;$('scrub').disabled=$('play').disabled=!result;
- draw();inspector(n);overview();analytics();setView(view);paint();
+ draw();inspector(n);overview();analytics();summary();setView(view);paint();
 }
 function coordinates(event){return new DOMPoint(event.clientX,event.clientY).matrixTransform($('graph').getScreenCTM().inverse());}
 const colors={source:'#d6e9c9',processor:'#dce6f1',inspection:'#f3e4c5',queue:'#e5dbef',sink:'#d4e9e0'};
@@ -85,9 +86,10 @@ $('graph').onkeydown=e=>{const id=e.target.dataset.id;if(id&&['Enter',' '].inclu
 function inspector(n){
  if(!n){$('inspect').innerHTML='<p>Add a station to begin.</p>';return;}
  const timed=['source','processor','inspection'].includes(n.type),proc=['processor','inspection'].includes(n.type),next=m.edges.find(e=>e[0]===n.id)?.[1];
+ const usedBy=normalizeProducts(m).filter(p=>!p.route.length||p.route.includes(n.id)).map(p=>p.name);
  const options=(items,current)=>items.map(([v,label])=>'<option value="'+escape(v)+'" '+(String(v)===String(current)?'selected':'')+'>'+escape(label)+'</option>').join('');
  const field=(title,id,value,min,max,step=1)=>'<label>'+title+'<input id="'+id+'" type="number" value="'+escape(value)+'" min="'+min+'" max="'+max+'" step="'+step+'"></label>';
- $('inspect').innerHTML='<span class="kind">'+kinds[n.type]+'</span><form id="edit"><label>Station name<input id="name" maxlength="48" required value="'+escape(n.name)+'"></label>'+
+ $('inspect').innerHTML='<span class="kind">'+kinds[n.type]+'</span><form id="edit"><h3>'+escape(n.name)+'</h3><p class="inspector-context">'+(usedBy.length?escape(usedBy.join(', '))+' flow'+(usedBy.length===1?'':'s')+' use this station.':'No product flow uses this station yet.')+'</p><label>Station name<input id="name" maxlength="48" required value="'+escape(n.name)+'"></label>'+
  (timed?field(n.type==='source'?'Mean arrival interval (s)':'Mean service time (s)','seconds',n.seconds,.001,604800,'any'):'')+
  (n.type!=='sink'?'<label>Next station<select id="next">'+options([['','Disconnected'],...m.nodes.filter(s=>s.id!==n.id&&s.type!=='source').map(s=>[s.id,s.name])],next??'')+'</select></label>':'')+
  (n.type!=='sink'?'<details class="advanced"><summary>Operating rules</summary>'+
@@ -105,6 +107,11 @@ function inspector(n){
 function metric(label,val,desc){return '<div class="metric"><span>'+escape(label)+'</span><strong>'+escape(val)+'</strong><p>'+escape(desc)+'</p></div>';}
 function overview(){const p=m.nodes.filter(n=>['processor','inspection'].includes(n.type)),slow=p.slice().sort((a,b)=>b.seconds/(b.servers??1)-a.seconds/(a.servers??1))[0],good=!validateModel(m).length;
  $('idealMetrics').innerHTML=metric('Limiting station',good&&slow?slow.name:'—','Mean service capacity')+metric('Station limit',good&&slow?fmt(3600*(slow.servers??1)/slow.seconds)+' / h':'—','Before losses, starvation or rework')+metric('Service per pass',good?fmt(p.reduce((a,n)=>a+n.seconds,0))+' s':'—','Without waiting or repeat visits');}
+function summary(){
+ const products=normalizeProducts(m),issues=validateModel(m),state=$('runState'),signal=$('runSignal'),facts=$('runFacts');
+ if(!result){state.textContent=issues.length?'Needs connection check':'Ready to simulate';signal.className=issues.length?'warn':'';facts.innerHTML='<span>'+products.length+' product'+(products.length===1?'':'s')+'</span><span>'+m.nodes.length+' stations · '+m.edges.length+' connections</span><span>'+ (issues.length?'Check model before running':'2D editor active') +'</span>';return;}
+ const r=result.primary,b=r.rows.find(n=>n.id===r.bottleneck);state.textContent='Run complete';signal.className='done';facts.innerHTML='<span>'+fmt(r.throughput)+' / h throughput</span><span>'+fmt(r.completed,0)+' completed · '+fmt(r.events,0)+' events</span><span>'+(b?'Bottleneck · '+escape(b.name):'No bottleneck identified')+'</span>';
+}
 function analytics(){
  $('report').disabled=!result;$('windowNote').textContent=result?'Seed '+result.primary.config.seed+' · '+fmt(result.primary.events,0)+' recorded events':'';
  if(!result){$('metrics').innerHTML='';$('details').innerHTML='<p>Run this revision to see throughput, station queues, and 3D playback.</p>';return;}
