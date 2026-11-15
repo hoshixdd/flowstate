@@ -1,9 +1,13 @@
-// Orthographic software renderer. World coordinates are [east, south, height].
+import {createDaylightRenderer} from './daylight.mjs';
+// Orthographic industrial cutaway. World coordinates are [east, south, height].
 export function createFactory(canvas, onSelect = () => {}) {
   const ctx = canvas.getContext('2d');
-  const palette = { steel:'#aabbd0', dark:'#253246', teal:'#42648d', tealLight:'#82abc4',
-    cream:'#e8eaf0', white:'#fbfcff', rubber:'#465856', amber:'#dda94c', orange:'#d98247', ink:'#223c35' };
-  const camera = { angle:.53, elevation:.50, zoom:1 };
+  let gpu=null;
+  try{gpu=createDaylightRenderer();}catch(error){console.warn('Using canvas factory renderer:',error.message);}
+  let focused=false;
+  const palette = { steel:'#aabbd0', dark:'#253246', teal:'#315662', tealLight:'#77adb4',
+    cream:'#e8eaf0', white:'#fbfcff', rubber:'#465856', amber:'#ffad30', orange:'#f26e23', ink:'#223c35' };
+  const camera = { angle:.43, elevation:.59, zoom:1 };
   let layer='live',run=null;
   let model, frame={}, selected, width=1, height=1, scale=1, centerX=0, centerZ=0, screenY=0;
   let faces=[], labels=[], hitFaces=[], hitLabels=[], pointer=null, disposed=false;
@@ -19,7 +23,7 @@ export function createFactory(canvas, onSelect = () => {}) {
   }
   function face(points,color,group,station,outline=false) {
     const screen=points.map(project), depth=screen.reduce((d,p)=>d+p[2],0)/screen.length;
-    faces.push({screen,color,group,station,outline,depth});
+    faces.push({world:points,screen,color,group,station,outline,depth});
   }
   function slab(x,z,b,w,l,h,color,group=3,station=null,rot=0,outline=true) {
     const c=Math.cos(rot),s=Math.sin(rot);
@@ -84,16 +88,82 @@ export function createFactory(canvas, onSelect = () => {}) {
   }
   function floor(loX,hiX,loZ,hiZ) {
     const cx=(loX+hiX)/2,cz=(loZ+hiZ)/2;
+    // A soft elliptical contact shadow grounds the entire cutaway.
+    const footprint=[project([loX,loZ,-.66]),project([hiX,loZ,-.66]),project([hiX,hiZ,-.66]),project([loX,hiZ,-.66])];
+    ctx.save();ctx.shadowColor='rgba(35,55,58,.36)';ctx.shadowBlur=Math.min(22,scale*.54);ctx.shadowOffsetY=5;polygon(footprint);ctx.fillStyle='#8da4a5';ctx.fill();ctx.restore();
     const glow=ctx.createRadialGradient(width*.52,height*.62,0,width*.52,height*.62,width*.53);
     glow.addColorStop(0,'rgba(91,167,225,.22)');glow.addColorStop(1,'rgba(91,167,225,0)');
     ctx.fillStyle=glow;ctx.fillRect(0,0,width,height);
     slab(cx,cz,-.60,hiX-loX+.14,hiZ-loZ+.14,.23,'#223745',0);
-    slab(cx,cz,-.38,hiX-loX+.08,hiZ-loZ+.08,.12,'#69cee2',0);
-    slab((loX+hiX)/2,(loZ+hiZ)/2,-.26,hiX-loX,hiZ-loZ,.25,'#50677d',0,null,0,false);
-    for(let x=Math.ceil(loX/2)*2;x<hiX;x+=2)plane(x,(loZ+hiZ)/2,.016,hiZ-loZ,.002,'#526760',1);
-    for(let z=Math.ceil(loZ/2)*2;z<hiZ;z+=2)plane((loX+hiX)/2,z,hiX-loX,.016,.002,'#526760',1);
+    slab(cx,cz,-.38,hiX-loX+.08,hiZ-loZ+.08,.12,'#7b9194',0);
+    slab((loX+hiX)/2,(loZ+hiZ)/2,-.26,hiX-loX,hiZ-loZ,.25,'#bbc5c3',0,null,0,false);
+    for(let x=Math.ceil(loX/2)*2;x<hiX;x+=2)plane(x,(loZ+hiZ)/2,.016,hiZ-loZ,.002,'#8f9f9e',1);
+    for(let z=Math.ceil(loZ/2)*2;z<hiZ;z+=2)plane((loX+hiX)/2,z,hiX-loX,.016,.002,'#8f9f9e',1);
     for(const z of [loZ+.28,hiZ-.28])plane((loX+hiX)/2,z,hiX-loX-.56,.06,.008,'#73887a',1);
     for(const x of [loX+.28,hiX-.28])plane(x,(loZ+hiZ)/2,.06,hiZ-loZ-.56,.008,'#73887a',1);
+  }
+  // The roof and near walls are cut away to keep the process and its queues visible.
+  function hall(x0,x1,z0,z1,campus){
+    const span=x1-x0,cx=(x0+x1)/2,wall='#c5d1d0',beam='#455c65';
+    const bays=Math.max(2,Math.min(12,Math.round(span/3.6))),bay=span/bays;
+    if(ca>-.1){
+      slab(cx,z0,0,span,.20,1.32,wall,3);
+      slab(cx,z0,3.25,span,.22,.24,'#91a2a4',3);
+      for(let i=0;i<bays;i++){
+        const x=x0+(i+.5)*bay;
+        slab(x,z0,1.32,bay-.12,.075,1.93,'#b4d6dc',3);
+        slab(x,z0+.055,2.36,bay,.055,.055,beam,3);
+        for(const d of [-.25,0,.25])slab(x+d*bay,z0+.07,1.34,.045,.06,1.88,'#8ba6ae',3);
+        // Directional bands of daylight cross the concrete under each clerestory.
+        face([[x-bay*.36,z0+.22,.009],[x+bay*.36,z0+.22,.009],[x+bay*.36+1.1,z0+2.9,.009],[x-bay*.36+1.1,z0+2.9,.009]],'rgba(255,248,214,.32)',1);
+        slab(x-bay/2,z0+.06,0,.17,.29,3.58,beam,3);
+        slab(x,z0+.28,3.37,bay,.09,.075,'#f7f2d4',3);
+      }
+      slab(cx,z0+.23,1.05,span,.065,.07,campus?'#467e89':'#e2a74f',3);
+    }
+    if(sa>-.12){
+      const mid=(z0+z1)/2,depth=z1-z0;
+      slab(x0,mid,0,.19,depth,1.47,wall,3);
+      if(!campus){
+        const dock=z0+depth*.40;
+        slab(x0+.06,dock,0,.28,2.65,2.96,beam,3);
+        for(let j=0;j<10;j++)slab(x0+.22,dock,.12+j*.265,.07,2.40,.245,'#9badaf',3);
+        for(const side of [-1,1]){cylinder(x0+.53,dock+side*1.45,0,.085,.78,'#f9b13e',null);cylinder(x0+.53,dock+side*1.45,.55,.088,.09,'#39474a',null);}
+      }
+    }
+    if(!campus){
+      // Receiving bay staging: empty return pallets and a parked manual pallet truck.
+      const sx=x0+1.85,sz=z1-2.85;
+      for(let level=0;level<3;level++){
+        const base=level*.24;
+        for(const side of [-.54,0,.54])slab(sx+side,sz,base,.14,1.12,.13,'#9c7959',3);
+        for(let k=0;k<6;k++)slab(sx,sz-.51+k*.20,base+.13,1.45,.17,.085,k%2?'#c39b6c':'#cda878',3);
+      }
+      const jx=sx+1.32,jz=sz+.62;
+      for(const side of [-.21,.21]){
+        slab(jx+side,jz+.31,.105,.13,1.12,.075,'#e8a138',3);
+        rod([jx+side-.09,jz+.74,.10],[jx+side+.09,jz+.74,.10],.095,'#344247',null);
+      }
+      slab(jx,jz-.32,.16,.58,.37,.30,'#efac3c',3);
+      rod([jx,jz-.30,.39],[jx,jz-.58,1.04],.065,'#566367',null);
+      rod([jx-.20,jz-.62,1.05],[jx+.20,jz-.62,1.05],.065,'#26373d',null);
+      if(ca>0){
+        // An overhead service conduit and louvered utilities cabinet sit behind the line.
+        for(const h of [2.88,3.05])rod([x0+.35,z0+.22,h],[x1-.35,z0+.22,h],.052,'#98a6a5',null);
+        const ux=x1-1.1,uz=z0+.58;
+        slab(ux,uz,0,1.48,.66,1.58,'#697d80',3);
+        for(const side of [-.36,.36]){
+          slab(ux+side,uz+.34,.09,.66,.046,1.37,'#aebcb9',3);
+          for(let j=0;j<5;j++)slab(ux+side,uz+.37,.21+j*.088,.47,.026,.029,'#586c6e',3);
+          slab(ux+side+.16,uz+.39,.88,.044,.052,.17,'#394b4e',3);
+        }
+      }
+    }
+    const aisle=z1-.85;
+    plane(cx,aisle,span-.65,1.15,.014,campus?'#81aeb0':'#94aaa2',1);
+    for(const side of [-1,1])plane(cx,aisle+side*.59,span-.6,.055,.018,'#f3ce73',1);
+    const crossing=x0+Math.min(2.8,span*.19);
+    for(let j=0;j<6;j++)plane(crossing+j*.20,aisle,.102,1.02,.021,'#f5f2e2',1);
   }
   function station(n,state,index,campus) {
     const {x,z,id,type}=n;
@@ -102,8 +172,8 @@ export function createFactory(canvas, onSelect = () => {}) {
     const line=(a,b,r,c)=>rod([x+a[0],z+a[1],a[2]],[x+b[0],z+b[1],b[2]],r,c,id);
     const {steel,dark,teal,tealLight,cream,white,amber,orange}=palette;
     const busy=Math.max(0,Number(state.busy)||0),waiting=Math.max(0,Number(state.waiting)||0),progress=Math.max(0,Math.min(1,Number(state.progress)||0));
-    const contact=project([x+.14,z+.25,0]);
-    face(Array.from({length:32},(_,i)=>[x+.15+1.95*Math.cos(i*Math.PI/16),z+.21+1.55*Math.sin(i*Math.PI/16),.012]),'rgba(6,16,32,.33)',1);
+    
+    face(Array.from({length:32},(_,i)=>[x+.15+1.95*Math.cos(i*Math.PI/16),z+.21+1.55*Math.sin(i*Math.PI/16),.012]),'rgba(6,16,32,.16)',1);
     if(layer==='load'&&run){
       const stats=run.rows.find(r=>r.id===id);
       if(stats)slab(x,z,.007,3.55,2.95,.025,stats.util>=.9?'#ff805b':stats.util>=.65?'#ffcc71':'#69c9d0',2,id);
@@ -136,7 +206,7 @@ export function createFactory(canvas, onSelect = () => {}) {
       for(const d of [-.62,.62])s(0,d,.13,2.78,.20,.18,dark);
       s(0,0,.31,2.80,1.54,.17,steel);
       // Material bins form part of the loading equipment.
-      for(const a of [-.78,0,.78]){s(a,0,.48,.65,1.25,.51,tealLight);s(a,0,.97,.70,1.31,.09,teal);s(a,0,1.065,.52,1.08,.02,dark);}
+      for(const a of [-.78,0,.78]){s(a,0,.48,.65,1.25,.51,tealLight);for(let j=0;j<4;j++)s(a-.25+j*.16,.635,.50,.045,.035,.43,teal);s(a,0,.97,.70,1.31,.09,teal);s(a,0,1.065,.52,1.08,.02,dark);}
       s(-1.12,-.73,.48,.12,.12,.94,amber);s(-.74,-.73,1.36,.86,.12,.09,amber);
     }else if(type==='sink'){
       for(const a of [-1.12,1.12])for(const d of [-.55,.55])s(a,d,.13,.12,.12,1.74,teal);
@@ -154,15 +224,40 @@ export function createFactory(canvas, onSelect = () => {}) {
       s(-.87,.40,1.22,.31,.21,.02,'#93bda4');for(const a of [-.68,-.42,-.16])s(a,.765,.33,.075,.02,.31,steel);
     }else if(/assembl|shap|review/i.test(n.name)||index%3===2){
       s(0,0,.14,2.70,1.61,.28,teal);s(0,0,.42,2.78,1.69,.15,cream);
+      // Open-front safety cell with mesh guard and a controller cabinet.
+      for(const side of [-1,1]){
+        s(side*1.34,-.82,.13,.09,.09,1.72,amber);
+        s(side*1.34,.48,.13,.09,.09,1.72,amber);
+        for(let j=0;j<8;j++)s(side*1.34,-.78+j*.17,.22,.023,.022,1.49,steel);
+        for(let j=0;j<5;j++)s(side*1.34,-.17,.34+j*.29,.025,1.28,.024,dark);
+        s(side*1.34,-.17,1.79,.08,1.38,.1,amber);
+      }
+      s(-1,-.35,.59,.46,.53,.91,cream);s(-1,-.07,1.11,.32,.034,.22,dark);
+      s(-1,-.048,1.15,.23,.02,.12,'#56afbf');
       cyl(-.42,0,.57,.43,.20,dark);cyl(-.42,0,.77,.31,.30,amber);
       const shoulder=[-.42,0,1.08],elbow=[-.79,-.12,1.96],wrist=[.32+progress*.19,-.10,2.12-progress*.30],tip=[.68+progress*.19,.12,1.43-progress*.30];
-      line(shoulder,elbow,.20,orange);line(elbow,wrist,.14,amber);line(wrist,tip,.115,orange);
+      line(shoulder,elbow,.25,orange);line(elbow,wrist,.19,orange);
+      line([-.56,-.28,1.15],[-.77,-.28,1.93],.067,steel);line([-.77,-.28,1.93],[wrist[0],-.27,wrist[2]],.045,dark);line(wrist,tip,.115,orange);
       for(const pt of [shoulder,elbow,wrist])cyl(pt[0],pt[1],pt[2]-.10,.19,.20,dark);
-      line(tip,[tip[0],tip[1],tip[2]-.23],.085,dark);s(.80,.02,.58,.72,.60,.14,steel);
+      // Joint housings sit across the arm axis. An external dress pack follows the elbow.
+      for(const pt of [shoulder,elbow,wrist]){
+        line([pt[0],pt[1]-.22,pt[2]],[pt[0],pt[1]+.22,pt[2]],.185,orange);
+        line([pt[0],pt[1]+.221,pt[2]],[pt[0],pt[1]+.253,pt[2]],.133,steel);
+        line([pt[0],pt[1]+.254,pt[2]],[pt[0],pt[1]+.267,pt[2]],.068,dark);
+      }
+      const pack=[[-.56,.20,.89],[-.88,.19,1.23],[-.94,.12,1.90],[-.78,.10,2.20],[-.47,.08,2.24],[wrist[0],.10,wrist[2]+.09]];
+      for(let j=1;j<pack.length;j++)line(pack[j-1],pack[j],.036,'#384348');
+      line(tip,[tip[0],tip[1],tip[2]-.16],.105,steel);
+      s(tip[0],tip[1],tip[2]-.23,.32,.18,.09,dark);
+      for(const side of [-1,1])s(tip[0]+side*.12,tip[1],tip[2]-.38,.055,.12,.19,steel);s(.80,.02,.58,.72,.60,.14,steel);
     }else{
       s(0,0,.14,2.51,1.57,.67,teal);s(0,0,.81,2.64,1.68,.12,steel);
       s(-.65,-.04,.94,.70,1.26,.81,cream);s(.72,-.04,.94,.37,1.26,.62,tealLight);
       line([-.38,-.22,1.34],[.63,-.22,1.34],.19,steel);line([-.38,.22,1.34],[.63,.22,1.34],.19,dark);
+      s(-.52,-.1,1.73,.95,1.28,.10,cream);
+      for(const post of [-.92,.08])s(post,.58,.94,.065,.05,.83,cream);
+      s(-.42,.58,1.27,.89,.04,.43,'#5f9ca5');
+      s(-.42,.62,1.10,.29,.045,.06,dark);
       s(-.64,.61,1.16,.43,.05,.31,dark);s(-.64,.65,1.22,.30,.025,.16,'#a8c6a3');
       for(const a of [-.52,-.31,-.10,.11])s(a,.80,.38,.09,.035,.22,dark);
     }
@@ -186,16 +281,21 @@ export function createFactory(canvas, onSelect = () => {}) {
     const dpr=Math.min(2,window.devicePixelRatio||1);
     if(canvas.width!==Math.round(width*dpr)||canvas.height!==Math.round(height*dpr)){canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);}
     ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,width,height);
-    const bg=ctx.createLinearGradient(0,0,width*.45,height);bg.addColorStop(0,'#233956');bg.addColorStop(.50,'#15263b');bg.addColorStop(1,'#0a1527');ctx.fillStyle=bg;ctx.fillRect(0,0,width,height);
+    const bg=ctx.createLinearGradient(0,0,width*.25,height);bg.addColorStop(0,'#e2e9e9');bg.addColorStop(.50,'#d0dcdf');bg.addColorStop(1,'#aebfc5');ctx.fillStyle=bg;ctx.fillRect(0,0,width,height);
     faces=[];labels=[];hitFaces=[];hitLabels=[];
     const nodes=model.nodes.map((n,i)=>({...n,x:Number.isFinite(n.x)?n.x/36:(i%4)*7,z:Number.isFinite(n.y)?n.y/30:Math.floor(i/4)*5}));
     if(!nodes.length)return;
-    const loX=Math.min(...nodes.map(n=>n.x))-2.45,hiX=Math.max(...nodes.map(n=>n.x))+2.45,loZ=Math.min(...nodes.map(n=>n.z))-2.18,hiZ=Math.max(...nodes.map(n=>n.z))+2.50;
+    const loX=Math.min(...nodes.map(n=>n.x))-3.45,hiX=Math.max(...nodes.map(n=>n.x))+2.7,loZ=Math.min(...nodes.map(n=>n.z))-3.35,hiZ=Math.max(...nodes.map(n=>n.z))+3.75;
     centerX=(loX+hiX)/2;centerZ=(loZ+hiZ)/2;ca=Math.cos(camera.angle);sa=Math.sin(camera.angle);ce=Math.cos(camera.elevation);se=Math.sin(camera.elevation);
     const spanX=hiX-loX,spanZ=hiZ-loZ;
-    scale=Math.min((width-34)/(Math.abs(ca)*spanX+Math.abs(sa)*spanZ),(height-44)/((Math.abs(sa)*spanX+Math.abs(ca)*spanZ)*se+3.3*ce))*camera.zoom;
-    scale=Math.max(.1,scale);screenY=height/2+scale*ce*.72;
+    scale=Math.min((width-34)/(Math.abs(ca)*spanX+Math.abs(sa)*spanZ),(height-58)/((Math.abs(sa)*spanX+Math.abs(ca)*spanZ)*se+3.3*ce))*camera.zoom;
+    scale=Math.max(.1,scale);
+    const target=focused&&nodes.find(n=>n.id===selected);
+    if(target){centerX=target.x;centerZ=target.z;scale=Math.min(width/8,height/6)*camera.zoom;}
+    screenY=height/2+scale*ce*(target?.id?1.04:1.58);
     floor(loX,hiX,loZ,hiZ);
+    const isCampus=/campus|service queue/i.test(model.category+' '+model.title);
+    hall(loX,hiX,loZ,hiZ,isCampus);
     const route=model.workStudy?.[layer]?.layout?.rows;
     if(Array.isArray(route)){
       for(let i=1;i<route.length;i++){
@@ -210,7 +310,9 @@ export function createFactory(canvas, onSelect = () => {}) {
     const campus=/campus|service queue/i.test(model.category+' '+model.title);
     nodes.forEach((n,i)=>station(n,frame[n.id]||{},i,campus));
     faces.sort((a,b)=>a.group-b.group||a.depth-b.depth);ctx.lineJoin='round';
-    for(const f of faces){polygon(f.screen);ctx.fillStyle=f.color;ctx.fill();if(f.outline&&scale>=10){ctx.lineWidth=.55;ctx.strokeStyle='rgba(42,61,51,.25)';ctx.stroke();}if(f.station)hitFaces.push(f);}
+    const accelerated=gpu?.(ctx,faces,{width,height,dpr,loX,hiX,loZ,hiZ,eye:[sa*ce,ca*ce,se]});
+    canvas.dataset.renderer=accelerated?'webgl2':'canvas';
+    for(const f of faces){if(f.station)hitFaces.push(f);if(accelerated)continue;polygon(f.screen);ctx.fillStyle=f.color;ctx.fill();if(f.outline&&scale>=10){ctx.lineWidth=.55;ctx.strokeStyle='rgba(42,61,51,.25)';ctx.stroke();}}
     // Labels stay readable when the floor turns and clear the front edge of each machine.
     const occupied=[];
     labels.sort((a,b)=>Number(b.active)-Number(a.active)||b.p[2]-a.p[2]);
@@ -219,7 +321,7 @@ export function createFactory(canvas, onSelect = () => {}) {
       const queued=Number(item.state.waiting)||0, text=layer==='load'&&run?.rows.some(r=>r.id===item.n.id)?name+' · '+Math.round(100*run.rows.find(r=>r.id===item.n.id).util)+'%':name+(queued?' · '+queued+' waiting':'');
       ctx.font=(item.active?'600 ':'500 ')+'11px "Segoe UI",sans-serif';
       const bw=ctx.measureText(text).width+19,bh=21,left=Math.max(3,Math.min(width-bw-3,item.p[0]-bw/2)),top=item.p[1]+Math.max(9,scale*.74);
-      if(top>height-3||occupied.some(r=>left<r.x+r.w+3&&left+bw>r.x-3&&top<r.y+r.h+2&&top+bh>r.y-2))continue;
+      if((target&&item.n.id!==target.id)||item.p[0]<0||item.p[0]>width||top<0||top>height-3||occupied.some(r=>left<r.x+r.w+3&&left+bw>r.x-3&&top<r.y+r.h+2&&top+bh>r.y-2))continue;
       const r={x:left,y:top,w:bw,h:bh,id:item.n.id};occupied.push(r);hitLabels.push(r);
       ctx.beginPath();ctx.roundRect(left,top,bw,bh,5);ctx.fillStyle=item.active?'#c9f4ff':'rgba(16,32,52,.94)';ctx.fill();ctx.strokeStyle=item.active?'#dce6a0':'#75877b';ctx.lineWidth=.8;ctx.stroke();
       ctx.fillStyle=item.active?'#273529':'#e0e6da';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,left+bw/2,top+bh/2);
@@ -238,7 +340,7 @@ export function createFactory(canvas, onSelect = () => {}) {
   function up(e){if(!pointer||pointer.id!==e.pointerId)return;const click=!pointer.moved;pointer=null;if(click){const rect=canvas.getBoundingClientRect(),id=pick(e.clientX-rect.left,e.clientY-rect.top);if(id)onSelect(id);}}
   function cancel(){pointer=null;}
   function wheel(e){e.preventDefault();camera.zoom=Math.max(.55,Math.min(3,camera.zoom*Math.exp(-e.deltaY*.0014)));draw();}
-  function reset(){Object.assign(camera,{angle:.53,elevation:.50,zoom:1});draw();}
+  function reset(){focused=false;Object.assign(camera,{angle:.43,elevation:.59,zoom:1});draw();}
   function keydown(e){const actions={ArrowLeft:()=>camera.angle-=.13,ArrowRight:()=>camera.angle+=.13,ArrowUp:()=>camera.elevation=Math.min(1.28,camera.elevation+.08),ArrowDown:()=>camera.elevation=Math.max(.18,camera.elevation-.08),'+':()=>camera.zoom=Math.min(3,camera.zoom*1.12),'=':()=>camera.zoom=Math.min(3,camera.zoom*1.12),'-':()=>camera.zoom=Math.max(.55,camera.zoom/1.12),Home:reset};
     if(!actions[e.key])return;e.preventDefault();actions[e.key]();draw();}
   if(!canvas.hasAttribute('tabindex'))canvas.tabIndex=0;
@@ -246,6 +348,6 @@ export function createFactory(canvas, onSelect = () => {}) {
   const listeners={pointerdown:down,pointermove:move,pointerup:up,pointercancel:cancel,lostpointercapture:cancel,wheel,keydown};
   for(const [name,handler] of Object.entries(listeners))canvas.addEventListener(name,handler,name==='wheel'?{passive:false}:false);
   const resize=typeof ResizeObserver!=='undefined'?new ResizeObserver(draw):null;resize?.observe(canvas);
-  return {update(nextModel,nextFrame,nextSelected,nextLayer='live',nextRun=null){layer=nextLayer;run=nextRun;model=nextModel;frame=nextFrame||{};selected=nextSelected;draw();},reset,
+  return {update(nextModel,nextFrame,nextSelected,nextLayer='live',nextRun=null){layer=nextLayer;run=nextRun;model=nextModel;frame=nextFrame||{};selected=nextSelected;draw();},reset,focus(){focused=true;camera.zoom=1;draw();},
     dispose(){disposed=true;resize?.disconnect();for(const [name,handler] of Object.entries(listeners))canvas.removeEventListener(name,handler);pointer=null;faces=[];hitFaces=[];}};
 }

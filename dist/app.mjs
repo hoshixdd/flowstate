@@ -33,7 +33,7 @@ function commit(edit,keepRun=false){past.push({model:clone(m),config:{...project
 function history(from,to){if(!from.length)return;remember();to.push({model:clone(m),config:{...project.config}});const state=from.pop();m=project.model=state.model;project.config=state.config;project.revision++;project.updated=new Date().toISOString();clearRun();save();render();}
 $('undo').onclick=()=>history(past,future);$('redo').onclick=()=>history(future,past);
 function setView(next){view=next;$('stage').hidden=view!=='3d';$('two').hidden=view!=='2d';$('view3d').setAttribute('aria-pressed',view==='3d');$('view2d').setAttribute('aria-pressed',view==='2d');if(view==='3d')paint();else draw();}
-$('view3d').onclick=()=>setView('3d');$('view2d').onclick=()=>setView('2d');$('fit').onclick=()=>factory.reset();
+$('view3d').onclick=()=>setView('3d');$('view2d').onclick=()=>setView('2d');$('fit').onclick=()=>factory.reset();$('focusStation').onclick=()=>factory.focus();
 function paint(){const run=result?.primary;const frame=frameAt(m,run,cursor);if(view==='3d')factory.update(m,frame,selected,$('floorLayer').value,run);$('scrub').value=cursor;$('clock').textContent=timeLabel(cursor);}
 function play(){
  if(!result)return; if(playing){stopPlaying();return;}if(cursor>=project.config.horizon)cursor=0;
