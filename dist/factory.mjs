@@ -1,9 +1,10 @@
 // Orthographic software renderer. World coordinates are [east, south, height].
 export function createFactory(canvas, onSelect = () => {}) {
   const ctx = canvas.getContext('2d');
-  const palette = { steel:'#a7b5b1', dark:'#314846', teal:'#447b70', tealLight:'#6da492',
-    cream:'#e4e8d9', white:'#f7f5e9', rubber:'#465856', amber:'#dda94c', orange:'#d98247', ink:'#223c35' };
+  const palette = { steel:'#aabbd0', dark:'#253246', teal:'#42648d', tealLight:'#82abc4',
+    cream:'#e8eaf0', white:'#fbfcff', rubber:'#465856', amber:'#dda94c', orange:'#d98247', ink:'#223c35' };
   const camera = { angle:.53, elevation:.50, zoom:1 };
+  let layer='live',run=null;
   let model, frame={}, selected, width=1, height=1, scale=1, centerX=0, centerZ=0, screenY=0;
   let faces=[], labels=[], hitFaces=[], hitLabels=[], pointer=null, disposed=false;
   let ca,sa,ce,se;
@@ -24,7 +25,10 @@ export function createFactory(canvas, onSelect = () => {}) {
     const c=Math.cos(rot),s=Math.sin(rot);
     const corners=[[-w/2,-l/2],[w/2,-l/2],[w/2,l/2],[-w/2,l/2]].map(([a,d])=>[x+a*c-d*s,z+a*s+d*c]);
     const top=corners.map(([a,d])=>[a,d,b+h]), bottom=corners.map(([a,d])=>[a,d,b]);
-    face(top,shade(color,1.035),group,station,outline);
+    if(group===3&&h>.28&&scale>8){
+      face(top.map(([a,d,y])=>[a+y*.28,d+y*.18,.124]),'rgba(11,25,41,.095)',2);
+    }
+    face(top,shade(color,1.08),group,station,outline);
     for(let i=0;i<4;i++){
       const j=(i+1)%4,dx=corners[j][0]-corners[i][0],dz=corners[j][1]-corners[i][1],len=Math.hypot(dx,dz);
       const nx=dz/len,nz=-dx/len;
@@ -79,7 +83,13 @@ export function createFactory(canvas, onSelect = () => {}) {
     for(let d=from+.85;d<to-.25;d+=2.2){face([[...at(d-.16,-.19),.823],[...at(d+.13),.823],[...at(d-.16,.19),.823],[...at(d-.05),.823]],'#e6ede2',2,null);}
   }
   function floor(loX,hiX,loZ,hiZ) {
-    slab((loX+hiX)/2,(loZ+hiZ)/2,-.26,hiX-loX,hiZ-loZ,.25,'#415751',0,null,0,false);
+    const cx=(loX+hiX)/2,cz=(loZ+hiZ)/2;
+    const glow=ctx.createRadialGradient(width*.52,height*.62,0,width*.52,height*.62,width*.53);
+    glow.addColorStop(0,'rgba(91,167,225,.22)');glow.addColorStop(1,'rgba(91,167,225,0)');
+    ctx.fillStyle=glow;ctx.fillRect(0,0,width,height);
+    slab(cx,cz,-.60,hiX-loX+.14,hiZ-loZ+.14,.23,'#223745',0);
+    slab(cx,cz,-.38,hiX-loX+.08,hiZ-loZ+.08,.12,'#69cee2',0);
+    slab((loX+hiX)/2,(loZ+hiZ)/2,-.26,hiX-loX,hiZ-loZ,.25,'#50677d',0,null,0,false);
     for(let x=Math.ceil(loX/2)*2;x<hiX;x+=2)plane(x,(loZ+hiZ)/2,.016,hiZ-loZ,.002,'#526760',1);
     for(let z=Math.ceil(loZ/2)*2;z<hiZ;z+=2)plane((loX+hiX)/2,z,hiX-loX,.016,.002,'#526760',1);
     for(const z of [loZ+.28,hiZ-.28])plane((loX+hiX)/2,z,hiX-loX-.56,.06,.008,'#73887a',1);
@@ -92,8 +102,17 @@ export function createFactory(canvas, onSelect = () => {}) {
     const line=(a,b,r,c)=>rod([x+a[0],z+a[1],a[2]],[x+b[0],z+b[1],b[2]],r,c,id);
     const {steel,dark,teal,tealLight,cream,white,amber,orange}=palette;
     const busy=Math.max(0,Number(state.busy)||0),waiting=Math.max(0,Number(state.waiting)||0),progress=Math.max(0,Math.min(1,Number(state.progress)||0));
-    plane(x+.17,z+.23,3.22,2.68,.012,'#30463f',1);
+    const contact=project([x+.14,z+.25,0]);
+    face(Array.from({length:32},(_,i)=>[x+.15+1.95*Math.cos(i*Math.PI/16),z+.21+1.55*Math.sin(i*Math.PI/16),.012]),'rgba(6,16,32,.33)',1);
+    if(layer==='load'&&run){
+      const stats=run.rows.find(r=>r.id===id);
+      if(stats)slab(x,z,.007,3.55,2.95,.025,stats.util>=.9?'#ff805b':stats.util>=.65?'#ffcc71':'#69c9d0',2,id);
+    }
     slab(x,z,.015,3.25,2.62,.10,'#6c8377',2,id);
+    // Recessed station perimeter light and front-panel service vents.
+    const edgeColor=state.paused?'#ffae53':busy?'#6fe8dd':'#95b0c8';
+    s(0,1.27,.115,2.72,.038,.045,edgeColor);
+    for(const side of [-1,1])s(side*1.45,1.16,.125,.15,.16,.04,steel);
     if(id===selected){
       for(const a of [-1,1])for(const d of [-1,1]){
         plane(x+a*1.51,z+d*1.27,.50,.105,.123,'#d8d970',2,id);
@@ -148,7 +167,7 @@ export function createFactory(canvas, onSelect = () => {}) {
       for(const a of [-.52,-.31,-.10,.11])s(a,.80,.38,.09,.035,.22,dark);
     }
     if(!['source','sink','queue'].includes(type)){
-      const light=busy?'#88c858':'#bac6bc';
+      const light=state.paused?'#ff9f47':busy?'#5ce9cd':'#bbcbe0';
       cyl(1.13,-.47,.55,.045,1.02,steel);cyl(1.13,-.47,1.57,.088,.23,light);
       if(busy){if(campus)person(x-.32,z+.90,teal,id);else crate(x+.62,z+.47,.93,.43,id);}
       for(let i=1;i<Math.min(busy,5);i++){const bx=x-1.55+(i-1)*.53;if(campus)person(bx,z+1.05,teal,id);else crate(bx,z+1.07,.13,.38,id);}
@@ -167,7 +186,7 @@ export function createFactory(canvas, onSelect = () => {}) {
     const dpr=Math.min(2,window.devicePixelRatio||1);
     if(canvas.width!==Math.round(width*dpr)||canvas.height!==Math.round(height*dpr)){canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);}
     ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,width,height);
-    const bg=ctx.createLinearGradient(0,0,width*.45,height);bg.addColorStop(0,'#1a2b29');bg.addColorStop(1,'#101e1e');ctx.fillStyle=bg;ctx.fillRect(0,0,width,height);
+    const bg=ctx.createLinearGradient(0,0,width*.45,height);bg.addColorStop(0,'#233956');bg.addColorStop(.50,'#15263b');bg.addColorStop(1,'#0a1527');ctx.fillStyle=bg;ctx.fillRect(0,0,width,height);
     faces=[];labels=[];hitFaces=[];hitLabels=[];
     const nodes=model.nodes.map((n,i)=>({...n,x:Number.isFinite(n.x)?n.x/36:(i%4)*7,z:Number.isFinite(n.y)?n.y/30:Math.floor(i/4)*5}));
     if(!nodes.length)return;
@@ -177,6 +196,15 @@ export function createFactory(canvas, onSelect = () => {}) {
     scale=Math.min((width-34)/(Math.abs(ca)*spanX+Math.abs(sa)*spanZ),(height-44)/((Math.abs(sa)*spanX+Math.abs(ca)*spanZ)*se+3.3*ce))*camera.zoom;
     scale=Math.max(.1,scale);screenY=height/2+scale*ce*.72;
     floor(loX,hiX,loZ,hiZ);
+    const route=model.workStudy?.[layer]?.layout?.rows;
+    if(Array.isArray(route)){
+      for(let i=1;i<route.length;i++){
+        const a=route[i-1],b=route[i];
+        if([a.x,a.y,b.x,b.y].some(v=>v==null||String(v).trim()===''||!Number.isFinite(Number(v))))continue;
+        const dx=(b.x-a.x)/36,dz=(b.y-a.y)/30;
+        if(dx||dz)slab((Number(a.x)+Number(b.x))/72,(Number(a.y)+Number(b.y))/60,.04,Math.hypot(dx,dz),.16,.04,layer==='Present'?'#67dcff':'#ffb35d',2,null,Math.atan2(dz,dx));
+      }
+    }
     const lookup=new Map(nodes.map(n=>[n.id,n]));
     for(const [src,dst] of model.edges){const a=lookup.get(src),b=lookup.get(dst);if(a&&b)belt(a,b);}
     const campus=/campus|service queue/i.test(model.category+' '+model.title);
@@ -188,12 +216,12 @@ export function createFactory(canvas, onSelect = () => {}) {
     labels.sort((a,b)=>Number(b.active)-Number(a.active)||b.p[2]-a.p[2]);
     for(const item of labels){
       const name=item.n.name.length>19?item.n.name.slice(0,17)+'…':item.n.name;
-      const queued=Number(item.state.waiting)||0, text=name+(queued?' · '+queued+' waiting':'');
+      const queued=Number(item.state.waiting)||0, text=layer==='load'&&run?.rows.some(r=>r.id===item.n.id)?name+' · '+Math.round(100*run.rows.find(r=>r.id===item.n.id).util)+'%':name+(queued?' · '+queued+' waiting':'');
       ctx.font=(item.active?'600 ':'500 ')+'11px "Segoe UI",sans-serif';
       const bw=ctx.measureText(text).width+19,bh=21,left=Math.max(3,Math.min(width-bw-3,item.p[0]-bw/2)),top=item.p[1]+Math.max(9,scale*.74);
       if(top>height-3||occupied.some(r=>left<r.x+r.w+3&&left+bw>r.x-3&&top<r.y+r.h+2&&top+bh>r.y-2))continue;
       const r={x:left,y:top,w:bw,h:bh,id:item.n.id};occupied.push(r);hitLabels.push(r);
-      ctx.beginPath();ctx.roundRect(left,top,bw,bh,5);ctx.fillStyle=item.active?'#d4df8c':'rgba(27,43,40,.96)';ctx.fill();ctx.strokeStyle=item.active?'#dce6a0':'#75877b';ctx.lineWidth=.8;ctx.stroke();
+      ctx.beginPath();ctx.roundRect(left,top,bw,bh,5);ctx.fillStyle=item.active?'#c9f4ff':'rgba(16,32,52,.94)';ctx.fill();ctx.strokeStyle=item.active?'#dce6a0':'#75877b';ctx.lineWidth=.8;ctx.stroke();
       ctx.fillStyle=item.active?'#273529':'#e0e6da';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,left+bw/2,top+bh/2);
     }
   }
@@ -218,7 +246,6 @@ export function createFactory(canvas, onSelect = () => {}) {
   const listeners={pointerdown:down,pointermove:move,pointerup:up,pointercancel:cancel,lostpointercapture:cancel,wheel,keydown};
   for(const [name,handler] of Object.entries(listeners))canvas.addEventListener(name,handler,name==='wheel'?{passive:false}:false);
   const resize=typeof ResizeObserver!=='undefined'?new ResizeObserver(draw):null;resize?.observe(canvas);
-  return {update(nextModel,nextFrame,nextSelected){model=nextModel;frame=nextFrame||{};selected=nextSelected;draw();},reset,
+  return {update(nextModel,nextFrame,nextSelected,nextLayer='live',nextRun=null){layer=nextLayer;run=nextRun;model=nextModel;frame=nextFrame||{};selected=nextSelected;draw();},reset,
     dispose(){disposed=true;resize?.disconnect();for(const [name,handler] of Object.entries(listeners))canvas.removeEventListener(name,handler);pointer=null;faces=[];hitFaces=[];}};
 }
-

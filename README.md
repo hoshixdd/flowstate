@@ -17,6 +17,8 @@ Open **Work study** from the studio navigation. Choose Present or Proposed and a
 
 The lab includes operations charts, material/worker/form process charts, scaled floor routes, stopwatch observations, work sampling, reference-based motion and standard data, and productivity. Use **Apply standard time and save** to set a processor or inspection station's mean service time. Rerun the simulation to see the effect. Manual and automatic time are sequential in the timing worksheet. Provide your own reference motion times, inputs and layout scale.
 
+The 3D floor opens by default. Its layer selector shows event playback, station utilization, or saved Present and Proposed flow routes. Capture a run in Work study to record its settings and outputs with a method. Use simulation data to trace one completed product, inspect station cycle times, or sample simulated equipment occupancy. Worker, form and reference-data worksheets retain simulation context while leaving real observations to the analyst. Apply a measured time to rerun the model, then capture the other method and compare throughput. In-progress worksheets have local draft recovery.
+
 ## Run locally
 
 Serve `dist` over HTTP so module workers can load:

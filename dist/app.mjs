@@ -18,7 +18,7 @@ try{
   else{const legacy=JSON.parse(localStorage.getItem('flowstate.process.v1')||'null');const first=record(legacy?.version===1&&Array.isArray(legacy.nodes)?legacy:template('lab'));db={version:2,active:first.id,projects:[first]};}
 }catch{const first=record(template('lab'));db={version:2,active:first.id,projects:[first]};warning='Previous data could not be loaded';}
 let project=db.projects.find(p=>p.id===db.active),m=project.model,selected=m.nodes.find(n=>n.type==='processor'&&n.name==='Assembly')?.id??m.nodes[0]?.id;
-let past=[],future=[],result=null,worker=null,view='2d',cursor=0,playing=false,raf=0,lastPaint=0,noticeTimer,linkMode=false,linkFrom=null;
+let past=[],future=[],result=null,worker=null,view='3d',cursor=0,playing=false,raf=0,lastPaint=0,noticeTimer,linkMode=false,linkFrom=null;
 function notify(text){$('notice').textContent=text;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>$('notice').textContent='',4200);}
 function save(){try{localStorage.setItem(storageKey,JSON.stringify(db));warning='';}catch{warning='Storage full or unavailable · export project';} $('save').textContent=warning||'Saved on this device';}
 function modal(title,html){$('dialogtitle').textContent=title;$('dialogbody').innerHTML=html;if(!$('dialog').open)$('dialog').showModal();}
@@ -29,12 +29,12 @@ function stopPlaying(){playing=false;cancelAnimationFrame(raf);$('play').textCon
 function cancelRun(){if(worker){worker.terminate();worker=null;} $('run').textContent='▶  Run simulation';}
 function clearRun(){cancelRun();stopPlaying();result=null;cursor=0;}
 function remember(){project.archives.unshift({revision:project.revision,model:clone(m),config:{...project.config},at:project.updated});project.archives=project.archives.slice(0,12);}
-function commit(edit){past.push({model:clone(m),config:{...project.config}});past=past.slice(-60);future=[];remember();edit();project.model=m;project.revision++;project.updated=new Date().toISOString();clearRun();save();render();}
+function commit(edit,keepRun=false){past.push({model:clone(m),config:{...project.config}});past=past.slice(-60);future=[];remember();edit();project.model=m;project.revision++;project.updated=new Date().toISOString();if(!keepRun)clearRun();save();render();}
 function history(from,to){if(!from.length)return;remember();to.push({model:clone(m),config:{...project.config}});const state=from.pop();m=project.model=state.model;project.config=state.config;project.revision++;project.updated=new Date().toISOString();clearRun();save();render();}
 $('undo').onclick=()=>history(past,future);$('redo').onclick=()=>history(future,past);
 function setView(next){view=next;$('stage').hidden=view!=='3d';$('two').hidden=view!=='2d';$('view3d').setAttribute('aria-pressed',view==='3d');$('view2d').setAttribute('aria-pressed',view==='2d');if(view==='3d')paint();else draw();}
 $('view3d').onclick=()=>setView('3d');$('view2d').onclick=()=>setView('2d');$('fit').onclick=()=>factory.reset();
-function paint(){const run=result?.primary;const frame=frameAt(m,run,cursor);if(view==='3d')factory.update(m,frame,selected);$('scrub').value=cursor;$('clock').textContent=timeLabel(cursor);}
+function paint(){const run=result?.primary;const frame=frameAt(m,run,cursor);if(view==='3d')factory.update(m,frame,selected,$('floorLayer').value,run);$('scrub').value=cursor;$('clock').textContent=timeLabel(cursor);}
 function play(){
  if(!result)return; if(playing){stopPlaying();return;}if(cursor>=project.config.horizon)cursor=0;
  playing=true;$('play').textContent='Ⅱ';let then=performance.now();lastPaint=0;
@@ -49,7 +49,7 @@ function render(){
  $('title').textContent=m.title;$('category').textContent=m.category+' · Revision '+project.revision;$('save').textContent=warning||'Saved on this device';
  const products=normalizeProducts(m);$('undo').disabled=!past.length;$('redo').disabled=!future.length;$('count').textContent=m.nodes.length+' stations · '+m.edges.length+' connections · '+products.length+' product'+(products.length===1?'':'s');
  $('productLegend').innerHTML=products.map(p=>'<span title="'+escape(productRouteLabel(p.route))+'"><i class="swatch" style="background:'+escape(p.color)+'"></i>'+escape(p.name)+'</span>').join('');
- $('stageStatus').textContent=result?.primary?'Event playback':view==='2d'?'2D model editor':'Factory floor';
+ $('stageStatus').textContent=floorStatus();
  $('link').setAttribute('aria-pressed',String(linkMode));$('link').textContent=linkMode?'Cancel connect':'Connect';
  $('stationPick').innerHTML=m.nodes.map(s=>'<option value="'+escape(s.id)+'" '+(s.id===selected?'selected':'')+'>'+escape(s.name)+'</option>').join('');
  $('scrub').max=project.config.horizon;$('scrub').disabled=$('play').disabled=!result;
@@ -218,5 +218,17 @@ $('report').onclick=()=>{if(!result)return;const r=result.primary;
  modal('Export report','<p>Download the reproducible run report or the station results for a spreadsheet.</p><div class="group"><button id="htmlReport" class="primary">HTML report</button><button id="csvReport">Station CSV</button></div>');
  $('htmlReport').onclick=()=>{const body='<p>'+escape(m.category)+' · Revision '+project.revision+' · '+VERSION+'</p><p>Observation window '+r.config.warmup+'–'+r.config.horizon+' seconds. Starts empty. Arrivals stop before the horizon. Completions at the horizon count. Buffers use FIFO and reject arrivals when full. Each station can have a planned stop. Work pauses and resumes. Utilization excludes the stop, and configured hourly cost accrues throughout the observation window. All starter times are illustrative.</p><p>'+r.completed+' completed · '+fmt(r.throughput)+' units/h · '+fmt(r.averageFlow)+' s average flow time · '+r.wip+' in progress · ₱'+fmt(r.unitCost,2)+' per completed unit.</p>'+$('details').innerHTML+'<h2>Replication completions</h2><p>'+result.units.join(', ')+'</p><h2>Model and settings</h2><pre>'+escape(JSON.stringify({engine:VERSION,model:m,settings:project.config},null,2))+'</pre>';download(slug(m.title)+'-run.html',reportPage(m.title+' · Run report',body),'text/html');};
  $('csvReport').onclick=()=>{const lines=[['Station','Servers','Utilization %','Mean queue','Peak queue','Mean waiting s','Rejected','Seed','Warm-up s','End s'],...r.rows.map(x=>[x.name,x.capacity,x.util*100,x.avgQueue,x.peak,x.avgWait,x.rejected,r.config.seed,r.config.warmup,r.config.horizon])];download(slug(m.title)+'-stations.csv','\ufeff'+lines.map(row=>row.map(v=>{let s=String(v);if(typeof v==='string'&&/^[=+@\-\t\r]/.test(s))s="'"+s;return '"'+s.replaceAll('"','""')+'"';}).join(',')).join('\r\n'),'text/csv');};};
-$('workStudy').onclick=()=>openStudy({model:m,run:result?.primary,modal,commit,escape,notify});
+function floorStatus(){
+ const mode=$('floorLayer').value;
+ if(mode==='load')return result?.primary?'Run utilization · blue <65% / amber 65–89% / coral ≥90%':'Run the model to see utilization';
+ if(mode==='Present'||mode==='Proposed')return m.workStudy?.[mode]?.layout?.rows?.length>1?mode+' route · study waypoints':'Save at least two '+mode.toLowerCase()+' flow diagram waypoints';
+ return result?.primary?'Event playback':'Factory floor';
+}
+$('floorLayer').onchange=()=>{$('stageStatus').textContent=floorStatus();paint();};
+function enterStudy(topic='overview'){
+ stopPlaying();
+ openStudy({model:m,run:result?.primary,selected,topic,draftKey:storageKey+'.study.'+project.id,getRevision:()=>project.revision,modal,commit,escape,notify,rerun:()=>runModel(true)});
+}
+$('workStudy').onclick=()=>enterStudy();
+$('measure').onclick=()=>enterStudy('timing');
 if(!warning)save();render();runModel(true);
