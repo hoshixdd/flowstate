@@ -11,6 +11,12 @@ Flowstate is a browser-based production-process simulation studio. It lets you d
 - Seeded replications, KPIs, queue history, bottleneck analysis, and capacity experiments
 - Local project library with version history, import/export, and offline standalone HTML build
 
+## Work study lab
+
+Open **Work study** from the studio navigation. Choose Present or Proposed and a worksheet. Save study stores the worksheets inside the active model so project export, version history and undo include them. Print study report opens a printable summary.
+
+The lab includes operations charts, material/worker/form process charts, scaled floor routes, stopwatch observations, work sampling, reference-based motion and standard data, and productivity. Use **Apply standard time and save** to set a processor or inspection station's mean service time. Rerun the simulation to see the effect. Manual and automatic time are sequential in the timing worksheet. Provide your own reference motion times, inputs and layout scale.
+
 ## Run locally
 
 Serve `dist` over HTTP so module workers can load:

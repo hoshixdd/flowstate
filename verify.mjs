@@ -26,3 +26,13 @@ assert.equal(simulateRun(base,{horizon:110}).completed,0);assert.equal(simulateR
 const bad=structuredClone(base);bad.edges.pop();assert.throws(()=>simulateRun(bad,{}));assert.throws(()=>simulateRun(base,{warmup:3600}));
 assert.equal(sampleSummary([78,78,78]).margin,0);assert.equal(sampleSummary([78]).margin,null);
 console.log('PASS deterministic reference, completion boundaries, FIFO, capped and explicit buffers, conservation, parallel servers, costs, replicated randomness, warm-up, rework, confidence interval and invalid models.');
+import {compareMethods, timeStudy, routeDistance, totalProductivity, samplingShares} from './dist/work-study.mjs';
+const waitStep = {activity:'delay', seconds:15, metres:0};
+assert.equal(compareMethods('worker',[waitStep],[]).savings.seconds,15);
+assert.throws(()=>compareMethods('worker',[{...waitStep,activity:'disposal'}],[]));
+assert.equal(timeStudy([40,50],100,0).cyclesPerHour,80);
+assert.equal(timeStudy([45],100,10,'shift-time').standard,50);
+assert.deepEqual(samplingShares({busy:8,idle:2}),{busy:.8,idle:.2});
+assert.equal(totalProductivity(700,[250,100]),2);
+assert.equal(routeDistance([{x:0,y:0},{x:3,y:4}],2),10);
+console.log('PASS work study chart types, method savings, timing, sampling, productivity and route scale.');
