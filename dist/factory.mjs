@@ -1,10 +1,11 @@
+import {workerPath} from './engine.mjs';
 import {createDaylightRenderer} from './daylight.mjs';
 // Orthographic industrial cutaway. World coordinates are [east, south, height].
-export function createFactory(canvas, onSelect = () => {}) {
+export function createFactory(canvas, onSelect = () => {}, onWorker = () => {}) {
   const ctx = canvas.getContext('2d');
   let gpu=null;
   try{gpu=createDaylightRenderer();}catch(error){console.warn('Using canvas factory renderer:',error.message);}
-  let focused=false;
+  let focused=false,clock=0,follow=0;
   const palette = { steel:'#aabbd0', dark:'#253246', teal:'#315662', tealLight:'#77adb4',
     cream:'#e8eaf0', white:'#fbfcff', rubber:'#465856', amber:'#ffad30', orange:'#f26e23', ink:'#223c35' };
   const camera = { angle:.43, elevation:.59, zoom:1 };
@@ -202,6 +203,12 @@ export function createFactory(canvas, onSelect = () => {}) {
         s(.30,-.22,1.09,.15,.15,.38,dark);s(.30,-.22,1.40,.81,.09,.50,dark);s(.30,-.16,1.48,.66,.035,.30,'#a7c8ab');
         s(-.72,.12,1.09,.39,.32,.04,white);s(.82,-.82,.20,.55,.50,.18,tealLight);
       }
+    }else if(model.crew&&['processor','inspection'].includes(type)){
+      // Manual packing bench, stock bins and a carton at the operator's reach.
+      for(const a of [-.98,.98])for(const d of [-.49,.49])s(a,d,.13,.12,.12,.78,steel);
+      s(0,0,.91,2.36,1.35,.13,cream);s(-.74,-.24,1.04,.60,.54,.28,tealLight);
+      s(.85,-.40,1.04,.12,.12,.48,dark);s(.85,-.40,1.48,.46,.08,.31,dark);s(.85,-.35,1.53,.35,.02,.19,'#81bcca');
+      if(busy)crate(x,z,1.05,.60,id);
     }else if(type==='source'){
       for(const d of [-.62,.62])s(0,d,.13,2.78,.20,.18,dark);
       s(0,0,.31,2.80,1.54,.17,steel);
@@ -264,7 +271,7 @@ export function createFactory(canvas, onSelect = () => {}) {
     if(!['source','sink','queue'].includes(type)){
       const light=state.paused?'#ff9f47':busy?'#5ce9cd':'#bbcbe0';
       cyl(1.13,-.47,.55,.045,1.02,steel);cyl(1.13,-.47,1.57,.088,.23,light);
-      if(busy){if(campus)person(x-.32,z+.90,teal,id);else crate(x+.62,z+.47,.93,.43,id);}
+      if(busy){if(campus)person(x-.32,z+.90,teal,id);else if(!model.crew)crate(x+.62,z+.47,.93,.43,id);}
       for(let i=1;i<Math.min(busy,5);i++){const bx=x-1.55+(i-1)*.53;if(campus)person(bx,z+1.05,teal,id);else crate(bx,z+1.07,.13,.38,id);}
     }
     for(let i=0;i<Math.min(waiting,8);i++){
@@ -272,6 +279,54 @@ export function createFactory(canvas, onSelect = () => {}) {
       if(campus)person(a,d,i%2?teal:'#7998aa',id);else crate(a,d,type==='queue'?.39:.02,.43,id);
     }
     labels.push({n,p:project(vector(x,z,0)),state,active:id===selected});
+  }
+  function workerPose(w){
+      if(!w)return null;
+      let lo=0,hi=w.intervals.length;
+      while(lo<hi){const mid=(lo+hi)>>1;if(w.intervals[mid].start<=clock)lo=mid+1;else hi=mid;}
+      const seg=w.intervals[lo-1];if(!seg)return null;
+      const a=model.nodes.find(n=>n.id===seg.from),b=model.nodes.find(n=>n.id===seg.to);
+      if(!a||!b)return null;
+      const path=workerPath(model,a,b),moving=seg.kind==='Walking',working=seg.kind==='Working';
+      let x=path[0][0],z=path[0][1],dx=0,dz=-1;
+      let remaining=moving?Math.max(0,clock-seg.start)*model.crew.speed/model.crew.scale:0;
+      if(moving)for(let i=1;i<path.length;i++){
+        const stepX=path[i][0]-x,stepZ=path[i][1]-z,len=Math.hypot(stepX,stepZ);if(!len)continue;
+        dx=stepX/len;dz=stepZ/len;
+        const step=Math.min(len,remaining);x+=dx*step;z+=dz*step;remaining-=step;if(remaining<=0)break;
+      }
+      x+=((w.id-1)%4)*.29;z+=Math.floor((w.id-1)/4)*.28;
+      return {x,z,dx,dz,working,moving,seg,id:'worker-label-'+w.id};
+  }
+  function drawWorkers(){
+    for(const w of run?.workers||[]){
+      const pose=workerPose(w);if(!pose)continue;
+      const {x,z,dx,dz,working,moving,seg}=pose;
+      if(w.id===follow&&moving){
+        const source=model.nodes.find(n=>n.id===seg.from),dest=model.nodes.find(n=>n.id===seg.to);
+        const path=workerPath(model,source,dest);
+        for(let i=1;i<path.length;i++){
+          const [ax,az]=path[i-1],[bx,bz]=path[i],len=Math.hypot(bx-ax,bz-az);
+          if(len)plane((ax+bx)/2,(az+bz)/2,len,.105,.033,'#379ea6',1,null,Math.atan2(bz-az,bx-ax));
+        }
+      }
+      const stride=moving?Math.sin(clock*5+w.id)*.18:0,shirt=['#257d88','#4569a3','#8875a6','#52816a'][(w.id-1)%4];
+      const at=(side,forward,h)=>[x-dz*side+dx*forward,z+dx*side+dz*forward,h];
+      for(const side of [-1,1]){
+        const foot=side*stride;
+        rod(at(side*.095,0,.78),at(side*.095,foot,.12),.077,'#34495a',null);
+        rod(at(side*.095,foot-.04,.095),at(side*.095,foot+.14,.095),.083,'#26323d',null);
+        const reach=working?.36+.13*Math.sin(clock*3):-.5*foot;
+        const elbow=at(side*.23,reach*.5,1.02);
+        rod(at(side*.18,0,1.30),elbow,.067,shirt,null);rod(elbow,at(side*.17,reach,working?1.08:.86),.056,'#bd9478',null);
+      }
+      // PPE and side-specific hands keep the selected operator readable in close-up.
+      const face=at(0,.113,1.43);cylinder(face[0],face[1],face[2],.074,.08,'#bc9479',null);
+      cylinder(x,z,1.53,.19,.045,'#e7bb45',null);
+      cylinder(x,z,.76,.20,.58,shirt,null);cylinder(x,z,1.06,.203,.065,'#d7e697',null);
+      cylinder(x,z,1.35,.135,.25,'#bc9479',null);cylinder(x,z,1.54,.165,.14,'#f3cd50',null);
+      labels.push({n:{id:'worker-label-'+w.id,name:'W'+w.id+' · '+seg.kind},p:project([x,z,2.60]),state:{},active:false,person:true});
+    }
   }
   function polygon(points){ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();}
   function draw(){
@@ -290,7 +345,7 @@ export function createFactory(canvas, onSelect = () => {}) {
     const spanX=hiX-loX,spanZ=hiZ-loZ;
     scale=Math.min((width-34)/(Math.abs(ca)*spanX+Math.abs(sa)*spanZ),(height-58)/((Math.abs(sa)*spanX+Math.abs(ca)*spanZ)*se+3.3*ce))*camera.zoom;
     scale=Math.max(.1,scale);
-    const target=focused&&nodes.find(n=>n.id===selected);
+    const target=(follow&&workerPose(run?.workers?.find(w=>w.id===follow)))||(focused&&nodes.find(n=>n.id===selected));
     if(target){centerX=target.x;centerZ=target.z;scale=Math.min(width/8,height/6)*camera.zoom;}
     screenY=height/2+scale*ce*(target?.id?1.04:1.58);
     floor(loX,hiX,loZ,hiZ);
@@ -309,6 +364,7 @@ export function createFactory(canvas, onSelect = () => {}) {
     for(const [src,dst] of model.edges){const a=lookup.get(src),b=lookup.get(dst);if(a&&b)belt(a,b);}
     const campus=/campus|service queue/i.test(model.category+' '+model.title);
     nodes.forEach((n,i)=>station(n,frame[n.id]||{},i,campus));
+    if(model.crew)drawWorkers();
     faces.sort((a,b)=>a.group-b.group||a.depth-b.depth);ctx.lineJoin='round';
     const accelerated=gpu?.(ctx,faces,{width,height,dpr,loX,hiX,loZ,hiZ,eye:[sa*ce,ca*ce,se]});
     canvas.dataset.renderer=accelerated?'webgl2':'canvas';
@@ -321,14 +377,14 @@ export function createFactory(canvas, onSelect = () => {}) {
       const queued=Number(item.state.waiting)||0, text=layer==='load'&&run?.rows.some(r=>r.id===item.n.id)?name+' · '+Math.round(100*run.rows.find(r=>r.id===item.n.id).util)+'%':name+(queued?' · '+queued+' waiting':'');
       ctx.font=(item.active?'600 ':'500 ')+'11px "Segoe UI",sans-serif';
       const bw=ctx.measureText(text).width+19,bh=21,left=Math.max(3,Math.min(width-bw-3,item.p[0]-bw/2)),top=item.p[1]+Math.max(9,scale*.74);
-      if((target&&item.n.id!==target.id)||item.p[0]<0||item.p[0]>width||top<0||top>height-3||occupied.some(r=>left<r.x+r.w+3&&left+bw>r.x-3&&top<r.y+r.h+2&&top+bh>r.y-2))continue;
-      const r={x:left,y:top,w:bw,h:bh,id:item.n.id};occupied.push(r);hitLabels.push(r);
+      if((target&&!item.person&&item.n.id!==target.id)||item.p[0]<0||item.p[0]>width||top<0||top>height-3||occupied.some(r=>left<r.x+r.w+3&&left+bw>r.x-3&&top<r.y+r.h+2&&top+bh>r.y-2))continue;
+      const r={x:left,y:top,w:bw,h:bh,id:item.n.id};occupied.push(r);hitLabels.push({...r,worker:item.person?Number(item.n.id.slice(13)):0});
       ctx.beginPath();ctx.roundRect(left,top,bw,bh,5);ctx.fillStyle=item.active?'#c9f4ff':'rgba(16,32,52,.94)';ctx.fill();ctx.strokeStyle=item.active?'#dce6a0':'#75877b';ctx.lineWidth=.8;ctx.stroke();
       ctx.fillStyle=item.active?'#273529':'#e0e6da';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,left+bw/2,top+bh/2);
     }
   }
   function pick(x,y){
-    const badge=hitLabels.find(r=>x>=r.x&&x<=r.x+r.w&&y>=r.y&&y<=r.y+r.h);if(badge)return badge.id;
+    const badge=hitLabels.find(r=>x>=r.x&&x<=r.x+r.w&&y>=r.y&&y<=r.y+r.h);if(badge)return badge.worker?{worker:badge.worker}:badge.id;
     function inside(pts){let value=false;for(let i=0,j=pts.length-1;i<pts.length;j=i++){
       const [ax,ay]=pts[i],[bx,by]=pts[j];if((ay>y)!==(by>y)&&x<(bx-ax)*(y-ay)/(by-ay)+ax)value=!value;
     }return value;}
@@ -337,7 +393,7 @@ export function createFactory(canvas, onSelect = () => {}) {
   function down(e){if(pointer||e.button!==0)return;pointer={id:e.pointerId,x:e.clientX,y:e.clientY,angle:camera.angle,elevation:camera.elevation,moved:false};canvas.setPointerCapture?.(e.pointerId);}
   function move(e){if(!pointer||pointer.id!==e.pointerId)return;const dx=e.clientX-pointer.x,dy=e.clientY-pointer.y;if(Math.abs(dx)+Math.abs(dy)>4)pointer.moved=true;if(pointer.moved){
     camera.angle=pointer.angle+dx*.008;camera.elevation=Math.max(.18,Math.min(1.28,pointer.elevation+dy*.006));draw();}}
-  function up(e){if(!pointer||pointer.id!==e.pointerId)return;const click=!pointer.moved;pointer=null;if(click){const rect=canvas.getBoundingClientRect(),id=pick(e.clientX-rect.left,e.clientY-rect.top);if(id)onSelect(id);}}
+  function up(e){if(!pointer||pointer.id!==e.pointerId)return;const click=!pointer.moved;pointer=null;if(click){const rect=canvas.getBoundingClientRect(),id=pick(e.clientX-rect.left,e.clientY-rect.top);if(id?.worker)onWorker(id.worker);else if(id)onSelect(id);}}
   function cancel(){pointer=null;}
   function wheel(e){e.preventDefault();camera.zoom=Math.max(.55,Math.min(3,camera.zoom*Math.exp(-e.deltaY*.0014)));draw();}
   function reset(){focused=false;Object.assign(camera,{angle:.43,elevation:.59,zoom:1});draw();}
@@ -348,6 +404,6 @@ export function createFactory(canvas, onSelect = () => {}) {
   const listeners={pointerdown:down,pointermove:move,pointerup:up,pointercancel:cancel,lostpointercapture:cancel,wheel,keydown};
   for(const [name,handler] of Object.entries(listeners))canvas.addEventListener(name,handler,name==='wheel'?{passive:false}:false);
   const resize=typeof ResizeObserver!=='undefined'?new ResizeObserver(draw):null;resize?.observe(canvas);
-  return {update(nextModel,nextFrame,nextSelected,nextLayer='live',nextRun=null){layer=nextLayer;run=nextRun;model=nextModel;frame=nextFrame||{};selected=nextSelected;draw();},reset,focus(){focused=true;camera.zoom=1;draw();},
+  return {update(nextModel,nextFrame,nextSelected,nextLayer='live',nextRun=null,nextClock=0,nextFollow=0){follow=nextFollow;clock=nextClock;layer=nextLayer;run=nextRun;model=nextModel;frame=nextFrame||{};selected=nextSelected;draw();},reset,focus(){focused=true;camera.zoom=1;draw();},
     dispose(){disposed=true;resize?.disconnect();for(const [name,handler] of Object.entries(listeners))canvas.removeEventListener(name,handler);pointer=null;faces=[];hitFaces=[];}};
 }

@@ -1,12 +1,13 @@
 export const kinds = {source:'Source',processor:'Processor',queue:'Queue',inspection:'Inspection',sink:'Sink'};
 export const templates = {
   lab:{title:'Assembly line',category:'IE classroom lab',names:['Arrivals','Preparation','Assembly','Packaging','Finished units'],times:[30,30,45,36,0]},
+  staffed:{title:'Staffed packing factory',category:'Worker measurement lab',names:['Receiving','Prepare cartons','Fill cartons','Inspect and seal','Dispatch'],times:[30,25,40,22,0]},
   production:{title:'Choco Bomb production',category:'Small production',names:['Ingredients','Mixing','Shaping','Packing','Finished boxes'],times:[40,35,55,40,0]},
   campus:{title:'Campus service queue',category:'Campus services',names:['Student arrivals','Check-in','Document review','Release','Students served'],times:[120,60,180,90,0]}
 };
 export function template(key){
  const t=templates[key], positions=[[36,64],[307,64],[578,64],[578,226],[307,226]];
- return {version:1,title:t.title,category:t.category,nodes:t.names.map((name,i)=>({id:'n'+i,name,type:i===0?'source':i===4?'sink':'processor',seconds:t.times[i],x:positions[i][0],y:positions[i][1]})),edges:[['n0','n1'],['n1','n2'],['n2','n3'],['n3','n4']],products:[{id:'unit',name:'Unit',color:'#d8fc81',interval:t.times[0],distribution:'fixed',route:[]}]};
+ return {...(key==='staffed'?{crew:{count:2,speed:1.2,scale:1}}:{}),version:1,title:t.title,category:t.category,nodes:t.names.map((name,i)=>({id:'n'+i,name,type:i===0?'source':i===4?'sink':'processor',seconds:t.times[i],x:positions[i][0],y:positions[i][1]})),edges:[['n0','n1'],['n1','n2'],['n2','n3'],['n3','n4']],products:[{id:'unit',name:'Unit',color:'#d8fc81',interval:t.times[0],distribution:'fixed',route:[]}]};
 }
 export function inspect(m){
  const issues=[],nodes=m.nodes, ids=new Set(nodes.map(n=>n.id)), source=nodes.filter(n=>n.type==='source'), sink=nodes.filter(n=>n.type==='sink');

@@ -23,18 +23,35 @@ function notify(text){$('notice').textContent=text;clearTimeout(noticeTimer);not
 function save(){try{localStorage.setItem(storageKey,JSON.stringify(db));warning='';}catch{warning='Storage full or unavailable · export project';} $('save').textContent=warning||'Saved on this device';}
 function modal(title,html){$('dialogtitle').textContent=title;$('dialogbody').innerHTML=html;if(!$('dialog').open)$('dialog').showModal();}
 $('close').onclick=()=>$('dialog').close();
-const factory=createFactory($('factory'),id=>selectStation(id));
+let observation=null;
+const factory=createFactory($('factory'),id=>selectStation(id),person=>{
+ $('followWorker').value=String(person);changeWorker();
+});
 function selectStation(id){selected=id;render();}
 function stopPlaying(){playing=false;cancelAnimationFrame(raf);$('play').textContent='▶';}
 function cancelRun(){if(worker){worker.terminate();worker=null;} $('run').textContent='▶  Run simulation';}
-function clearRun(){cancelRun();stopPlaying();result=null;cursor=0;}
+function clearRun(){observation=null;cancelRun();stopPlaying();result=null;cursor=0;}
 function remember(){project.archives.unshift({revision:project.revision,model:clone(m),config:{...project.config},at:project.updated});project.archives=project.archives.slice(0,12);}
 function commit(edit,keepRun=false){past.push({model:clone(m),config:{...project.config}});past=past.slice(-60);future=[];remember();edit();project.model=m;project.revision++;project.updated=new Date().toISOString();if(!keepRun)clearRun();save();render();}
 function history(from,to){if(!from.length)return;remember();to.push({model:clone(m),config:{...project.config}});const state=from.pop();m=project.model=state.model;project.config=state.config;project.revision++;project.updated=new Date().toISOString();clearRun();save();render();}
 $('undo').onclick=()=>history(past,future);$('redo').onclick=()=>history(future,past);
 function setView(next){view=next;$('stage').hidden=view!=='3d';$('two').hidden=view!=='2d';$('view3d').setAttribute('aria-pressed',view==='3d');$('view2d').setAttribute('aria-pressed',view==='2d');if(view==='3d')paint();else draw();}
-$('view3d').onclick=()=>setView('3d');$('view2d').onclick=()=>setView('2d');$('fit').onclick=()=>factory.reset();$('focusStation').onclick=()=>factory.focus();
-function paint(){const run=result?.primary;const frame=frameAt(m,run,cursor);if(view==='3d')factory.update(m,frame,selected,$('floorLayer').value,run);$('scrub').value=cursor;$('clock').textContent=timeLabel(cursor);}
+$('view3d').onclick=()=>setView('3d');$('view2d').onclick=()=>setView('2d');$('fit').onclick=()=>{observation=null;$('followWorker').value='0';factory.reset();paint();};$('focusStation').onclick=()=>{observation=null;$('followWorker').value='0';factory.focus();paint();};
+function observerHud(run){
+ const id=Number($('followWorker').value),w=run?.workers?.find(w=>w.id===id);
+ $('observerHud').hidden=!w;
+ $('markObservation').textContent=observation?'Finish and chart':'Start observation';
+ if(!w)return;
+ let lo=0,hi=w.intervals.length;
+ while(lo<hi){const mid=(lo+hi)>>1;if(w.intervals[mid].start<=cursor)lo=mid+1;else hi=mid;}
+ const seg=w.intervals[lo-1];if(!seg)return;
+ const station=m.nodes.find(n=>n.id===seg.to)?.name||'';
+ const elapsed=Math.max(0,Math.min(cursor,seg.end)-seg.start);
+ $('observerTitle').textContent='Worker '+id+' · '+seg.kind;
+ $('observerTask').textContent=(seg.kind==='Walking'?'To ':'At ')+station+(seg.job?' · unit '+seg.job:'')+' · '+fmt(elapsed)+' s'+(observation?' · recording '+fmt(Math.max(0,cursor-observation.from))+' s':'');
+ $('observerProgress').value=Math.min(1,elapsed/Math.max(.001,seg.end-seg.start));
+}
+function paint(){const run=result?.primary;const frame=frameAt(m,run,cursor);if(view==='3d')factory.update(m,frame,selected,$('floorLayer').value,run,cursor,Number($('followWorker').value));observerHud(run);$('scrub').value=cursor;$('clock').textContent=timeLabel(cursor);}
 function play(){
  if(!result)return; if(playing){stopPlaying();return;}if(cursor>=project.config.horizon)cursor=0;
  playing=true;$('play').textContent='Ⅱ';let then=performance.now();lastPaint=0;
@@ -45,6 +62,8 @@ function play(){
 $('play').onclick=play;$('scrub').oninput=()=>{stopPlaying();cursor=+$('scrub').value;paint();};
 $('stationPick').onchange=()=>selectStation($('stationPick').value);
 function render(){
+ const people=result?.primary?.workers||[],follow=$('followWorker'),old=follow.value;
+ $('crewReplay').hidden=!people.length;follow.innerHTML='<option value="0">Whole floor</option>'+people.map(w=>'<option value="'+w.id+'">Worker '+w.id+'</option>').join('');if(people.some(w=>w.id===Number(old)))follow.value=old;
  const n=m.nodes.find(n=>n.id===selected)||m.nodes[0];selected=n?.id;
  $('title').textContent=m.title;$('category').textContent=m.category+' · Revision '+project.revision;$('save').textContent=warning||'Saved on this device';
  const products=normalizeProducts(m);$('undo').disabled=!past.length;$('redo').disabled=!future.length;$('count').textContent=m.nodes.length+' stations · '+m.edges.length+' connections · '+products.length+' product'+(products.length===1?'':'s');
@@ -147,7 +166,7 @@ function slug(name){return name.replace(/[^a-z0-9_-]+/gi,'-').slice(0,60)||'flow
 function validImport(m){
  if(!m||typeof m.title!=='string'||m.title.length>120||typeof m.category!=='string'||m.category.length>120||!Array.isArray(m.nodes)||m.nodes.length>100||!Array.isArray(m.edges)||m.edges.length>200)throw Error('Invalid project format.');
  if(!m.nodes.every(n=>n&&Object.hasOwn(kinds,n.type)&&typeof n.id==='string'&&/^[\w-]{1,80}$/.test(n.id)&&!['__proto__','constructor','prototype'].includes(n.id)&&typeof n.name==='string'&&n.name.length<=80&&Number.isFinite(n.x)&&Number.isFinite(n.y)&&Math.abs(n.x)<100001&&Math.abs(n.y)<100001&&Number.isFinite(n.seconds))||!m.edges.every(e=>Array.isArray(e)&&e.length===2&&e.every(v=>m.nodes.some(n=>n.id===v))))throw Error('Invalid station or connection.');
- const issues=validateModel(m);if(issues.some(s=>/invalid ID|unknown distribution|1–64|invalid waiting|invalid hourly|valid positive|invalid rework/.test(s)))throw Error(issues.join(' '));
+ const issues=validateModel(m);if(issues.some(s=>/workers, walking speed|invalid ID|unknown distribution|1–64|invalid waiting|invalid hourly|valid positive|invalid rework/.test(s)))throw Error(issues.join(' '));
  return clone(m);
 }
 function activate(p){clearRun();project=p;db.active=p.id;m=p.model;selected=m.nodes.find(n=>n.type==='processor')?.id??m.nodes[0]?.id;past=[];future=[];save();$('dialog').close();render();factory.reset();runModel(true);}
@@ -225,10 +244,61 @@ function floorStatus(){
  return result?.primary?'Event playback':'Factory floor';
 }
 $('floorLayer').onchange=()=>{$('stageStatus').textContent=floorStatus();paint();};
-function enterStudy(topic='overview'){
+function enterStudy(topic='overview',range=null){
  stopPlaying();
- openStudy({model:m,run:result?.primary,selected,topic,draftKey:storageKey+'.study.'+project.id,getRevision:()=>project.revision,modal,commit,escape,notify,rerun:()=>runModel(true)});
+ openStudy({model:m,run:result?.primary,selected,topic,initialWorker:Number($('followWorker').value)||1,range,draftKey:storageKey+'.study.'+project.id,getRevision:()=>project.revision,modal,commit,escape,notify,rerun:()=>runModel(true)});
 }
 $('workStudy').onclick=()=>enterStudy();
 $('measure').onclick=()=>enterStudy('timing');
-if(!warning)save();render();runModel(true);
+function openWorkerFactory(){
+  const existing=db.projects.find(p=>!p.archived&&p.model.category==='Worker measurement lab'&&p.model.crew);
+  if(existing)activate(existing);else addProject(template('staffed'));
+  $('speed').value='1';setView('3d');
+}
+function workersPanel(){
+  const crew=m.crew||{count:2,speed:1.2,scale:1},r=result?.primary;
+  const rows=(r?.workers||[]).map(w=>{
+    const totals={Working:0,Walking:0,Waiting:0,Idle:0};let metres=0;
+    for(const seg of w.intervals){
+      const dt=Math.max(0,Math.min(seg.end,r.config.horizon)-Math.max(seg.start,r.config.warmup));
+      totals[seg.kind]+=dt;metres+=dt/(seg.end-seg.start)*(seg.distance||0);
+    }
+    return '<tr><th>W'+w.id+'</th>'+[totals.Working,totals.Walking,totals.Waiting+totals.Idle,metres].map(v=>'<td>'+fmt(v)+'</td>').join('')+'</tr>';
+  }).join('');
+  modal('Worker measurement lab','<p>Each processing or inspection step needs one available worker and one free station server. Workers take the oldest available queued job and walk to it along the shared aisle.</p><form id="crewForm"><div class="grid2"><label>Shared workers<input id="crewCount" type="number" min="1" max="16" step="1" required value="'+escape(crew.count)+'"></label><label>Walking speed (m/s)<input id="crewSpeed" type="number" min=".1" max="4" step="any" required value="'+escape(crew.speed)+'"></label><label>Metres per 3D floor unit<input id="crewScale" type="number" min=".001" max="100" step="any" required value="'+escape(crew.scale)+'"></label></div><button class="primary">Apply staffing and run</button></form>'+
+    (rows?'<h3 class="subhead">Observed worker time</h3><div class="datagrid"><table><tr><th>Worker</th><th>Hands-on (s)</th><th>Walk (s)</th><th>Wait / idle (s)</th><th>Walk (m)</th></tr>'+rows+'</table></div><button id="observeWorker">Observe a worker in Work Study</button>':'')+
+    '<div class="group"><button id="crewExample">Open staffed packing factory</button></div><p class="muted">The starter layout and times are illustrative. Use measured station times, floor scale and walking speed to represent your factory.</p>');
+  $('crewForm').onsubmit=e=>{e.preventDefault();const next={count:$('crewCount').valueAsNumber,speed:$('crewSpeed').valueAsNumber,scale:$('crewScale').valueAsNumber};
+    if(!m.nodes.some(n=>['processor','inspection'].includes(n.type))){notify('Add a processing station first.');return;}
+    commit(()=>{m.crew=next;});$('dialog').close();runModel(true);};
+  $('crewExample').onclick=openWorkerFactory;
+  if($('observeWorker'))$('observeWorker').onclick=()=>enterStudy('worker');
+}
+$('workers').onclick=workersPanel;
+function changeWorker(){observation=null;setView('3d');paint();}
+$('followWorker').onchange=changeWorker;
+$('expandFloor').onclick=()=>{
+ const expanded=document.body.classList.toggle('floor-expanded');
+ $('expandFloor').setAttribute('aria-pressed',String(expanded));$('expandFloor').textContent=expanded?'Exit expanded view':'Expand floor';
+};
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.body.classList.contains('floor-expanded')&&!$('dialog').open)$('expandFloor').click();});
+$('markObservation').onclick=()=>{
+ const r=result?.primary;if(!r?.workers?.length)return;
+ if(!observation){
+   if(cursor<r.config.warmup||cursor>=r.config.horizon){notify('Choose a time inside the observation window.');return;}
+   if(!$('followWorker').value||$('followWorker').value==='0')$('followWorker').value='1';
+   observation={from:cursor,id:Number($('followWorker').value)};setView('3d');if(!playing)play();paint();
+ }else{
+   if(cursor<=observation.from){notify('Advance replay beyond the start of the observation.');return;}
+   stopPlaying();const range={from:observation.from,to:cursor};$('followWorker').value=String(observation.id);observation=null;paint();enterStudy('worker',range);
+ }
+};
+$('workerChart').onclick=()=>enterStudy('worker');
+$('nextActivity').onclick=()=>{
+ const id=Number($('followWorker').value)||1;
+ const w=result?.primary?.workers.find(w=>w.id===id);if(!w)return;
+ $('followWorker').value=String(id);stopPlaying();cursor=w.intervals.find(i=>i.start>cursor+.00001)?.start??project.config.horizon;
+ setView('3d');paint();
+};
+if(!warning)save();render();
+if(location.hash==='#worker-factory')openWorkerFactory();else runModel(true);

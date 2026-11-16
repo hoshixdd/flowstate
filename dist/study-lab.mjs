@@ -66,11 +66,23 @@ function blankTopic(key){
 }
 
 // Use one completed job so branching and repeated visits stay in event order.
-export function simulationWorksheet(topic,model,run,stationId){
+export function simulationWorksheet(topic,model,run,stationId,workerId=1,from=run.config.warmup,to=run.config.horizon){
   const name=id=>model.nodes.find(n=>n.id===id)?.name||id;
   const stamp='Simulation · seed '+run.config.seed+' · observation window '+run.config.warmup+'–'+run.config.horizon+' s';
   const end=run.eventLog.find(ev=>ev.type==='departure'&&ev.time>=run.config.warmup);
   const context=stamp+' · '+run.completed+' completed · bottleneck '+name(run.bottleneck);
+  if(topic==='worker'&&run.workers?.length){
+    if(!Number.isFinite(from)||!Number.isFinite(to)||from<run.config.warmup||to>run.config.horizon||to<=from)throw Error('Choose a positive observation window within the measured run.');
+    const worker=run.workers.find(w=>w.id===workerId);if(!worker)throw Error('Choose a worker from this run.');
+    const rows=[];
+    for(const i of worker.intervals){
+      const start=Math.max(i.start,from),end=Math.min(i.end,to);if(end<=start)continue;
+      const activity=i.kind==='Walking'?'move':i.kind==='Working'?(model.nodes.find(n=>n.id===i.to)?.type==='inspection'?'inspection':'operation'):'delay';
+      rows.push({description:i.kind+' · '+(i.from===i.to?name(i.to):name(i.from)+' → '+name(i.to)),activity,qty:1,seconds:end-start,metres:(i.distance||0)*(end-start)/(i.end-i.start),remarks:'W'+worker.id+' · '+format(start)+'–'+format(end)+' s'+(i.job?' · unit '+i.job:'')});
+      if(rows.length>500)throw Error('Choose a shorter observation window (500 activities maximum per worksheet).');
+    }
+    return {rows,provenance:stamp+' · worker '+worker.id+' · observed '+from+'–'+to+' s · simulated worker activity.'};
+  }
   if(['worker','form','standards'].includes(topic))return {provenance:context+'. Record actual worker movement, document handling or reference times separately.'};
   if(topic==='sampling'){
     const track=run.tracks[stationId]||[];
@@ -120,7 +132,7 @@ export function simulationWorksheet(topic,model,run,stationId){
   return {rows,provenance:stamp+' · simulated job '+end.jobId+' · product '+end.productId+'. Confirm physical distances and component relationships by observation.'};
 }
 
-export function openStudy({model,run,selected,topic='overview',draftKey,getRevision,modal,commit,escape:e,notify,rerun}){
+export function openStudy({model,run,selected,topic='overview',initialWorker=1,range=null,draftKey,getRevision,modal,commit,escape:e,notify,rerun}){
   let draft=structuredClone(model.workStudy||{Present:{},Proposed:{}});
   let recovered=false;
   try{const saved=JSON.parse(localStorage.getItem(draftKey));if(saved?.revision===getRevision()&&saved.data?.Present&&saved.data?.Proposed){draft=saved.data;recovered=true;}}catch{}
@@ -130,7 +142,8 @@ export function openStudy({model,run,selected,topic='overview',draftKey,getRevis
     catch{const status=id('status');if(status)status.textContent='Draft recovery unavailable. Save study and export the project.';}
   }
   let method='Present';
-  let station=selected;
+  let station=selected,workerId=initialWorker,from=run?.config.warmup||0,to=run?Math.min(run.config.horizon,run.config.warmup+300):0;
+  if(range){from=range.from;to=range.to;}
   const methodTimes=m=>draft[m].stationTimes||{};
   const get=(k=topic,m=method)=>draft[m][k]??=(blankTopic(k));
   let watchStart=null;
@@ -216,7 +229,8 @@ export function openStudy({model,run,selected,topic='overview',draftKey,getRevis
     modal('Work study','<section id="ws-lab">'+source+evidence+'<div class="ws-tools"><label>Worksheet '+select('topic',Object.entries(topics).map(([k,v])=>[k,v[0]]),topic)+'</label><label>Method '+select('method',methods.map(m=>[m,m]),method)+'</label></div><p>'+e(topics[topic][1])+'</p><div class="ws-fields">'+form.map(f=>'<label>'+e(f[1])+control(f,t[f[0]],'')+'</label>').join('')+'</div>'+
       (cols.length?'<div class="ws-scroll"><table><thead><tr><th>#</th>'+cols.map(c=>'<th>'+e(c[1])+'</th>').join('')+'<th></th></tr></thead><tbody>'+t.rows.map((r,i)=>'<tr><td>'+(i+1)+'</td>'+cols.map(c=>'<td>'+control(c,r[c[0]],'data-row="'+i+'"')+'</td>').join('')+'<td><button data-remove="'+i+'" aria-label="Remove row '+(i+1)+'">×</button></td></tr>').join('')+'</tbody></table></div><button id="ws-add">Add row</button>':'')+
       (topic==='layout'?select('station',model.nodes.map(n=>[n.id,n.name]),'')+' <button id="ws-point">Add station waypoint</button><p>Click the floor plan to trace aisle turns, or enter coordinates in the table.</p>':'')+
-      (run&&['material','operations','layout','form','worker','timing','sampling','standards'].includes(topic)?'<button id="ws-import">Use simulation '+(['worker','form','standards'].includes(topic)?'as study context':'data')+'</button>':'')+
+      (topic==='worker'&&run?.workers?.length?'<div class="ws-tools"><label>Observe worker '+select('person',run.workers.map(w=>[w.id,'Worker '+w.id]),workerId)+'</label><label>From second<input type="number" id="ws-from" value="'+from+'"></label><label>Through second<input type="number" id="ws-to" value="'+to+'"></label></div>':'')+
+      (run&&['material','operations','layout','form','worker','timing','sampling','standards'].includes(topic)?'<button id="ws-import">Use simulation '+((['form','standards'].includes(topic)||topic==='worker'&&!run.workers?.length)?'as study context':'data')+'</button>':'')+
       (topic==='productivity'&&run?'<button id="ws-use">Use '+e(run.completed)+' completed units from run</button>':'')+
       (topic==='timing'?'<button id="ws-watch">'+(watchStart===null?'Start observation':'Record elapsed seconds')+'</button>':'')+
       '<p class="study-evidence">'+e(t.provenance||'')+'</p><div id="ws-output" aria-live="polite">'+safeOutput(topic,t,method)+'</div><label>'+e(guides[topic])+'<textarea data-key="discussion" rows="3">'+e(t.discussion||'')+'</textarea></label>'+
@@ -229,12 +243,14 @@ export function openStudy({model,run,selected,topic='overview',draftKey,getRevis
     if(id('station')&&topic!=='layout')id('station').onchange=()=>{station=id('station').value;};
     if(id('capture'))id('capture').onclick=()=>{
       draft[method].stationTimes=Object.fromEntries(model.nodes.filter(n=>['processor','inspection'].includes(n.type)).map(n=>[n.id,n.seconds]));
+      draft[method].crew=model.crew?structuredClone(model.crew):null;
       draft[method].evidence={completed:run.completed,rate:run.throughput,cost:run.cost,config:structuredClone(run.config),bottleneck:run.rows.find(r=>r.id===run.bottleneck)?.name||'—'};
       refresh();id('status').textContent='Run captured. Save study to keep this evidence.';
     };
     if(id('import'))id('import').onclick=()=>{
       try{
-        const data=simulationWorksheet(topic,model,run,id('station')?.value||station);
+        if(id('person')){workerId=Number(id('person').value);from=id('from').valueAsNumber;to=id('to').valueAsNumber;}
+        const data=simulationWorksheet(topic,model,run,id('station')?.value||station,workerId,from,to);
         if(data.rows?.length&&t.rows.length&&!confirm('Replace these worksheet rows with simulation data?'))return;
         if(data.observations&&t.observations&&!confirm('Replace the listed cycle times with simulated cycles?'))return;
         Object.assign(t,data);refresh();id('status').textContent=t.provenance;
@@ -259,7 +275,7 @@ export function openStudy({model,run,selected,topic='overview',draftKey,getRevis
     id('save').onclick=()=>{commit(()=>{model.workStudy=structuredClone(draft);},true);discardDraft();id('status').textContent='Study saved with this project.';};
     if(id('replay'))id('replay').onclick=()=>{
       const times=methodTimes(method);
-      commit(()=>{model.workStudy=structuredClone(draft);for(const n of model.nodes)if(['processor','inspection'].includes(n.type)&&Number.isFinite(times[n.id])&&times[n.id]>=.001&&times[n.id]<=604800)n.seconds=times[n.id];});
+      commit(()=>{model.workStudy=structuredClone(draft);if(Object.hasOwn(draft[method],'crew'))model.crew=structuredClone(draft[method].crew);for(const n of model.nodes)if(['processor','inspection'].includes(n.type)&&Number.isFinite(times[n.id])&&times[n.id]>=.001&&times[n.id]<=604800)n.seconds=times[n.id];});
       discardDraft();document.getElementById('dialog').close();rerun();
     };
     if(id('apply'))id('apply').onclick=()=>{try{const seconds=(topic==='timing'?duration(t):standardFromData(t)).standard;if(seconds<0.001||seconds>604800)throw Error('Station time must be between 0.001 and 604800 seconds.');const n=model.nodes.find(n=>n.id===id('station').value);draft[method].stationTimes={...Object.fromEntries(model.nodes.filter(n=>['processor','inspection'].includes(n.type)).map(n=>[n.id,n.seconds])),...methodTimes(method),[n.id]:seconds};commit(()=>{model.workStudy=structuredClone(draft);for(const st of model.nodes)if(Object.hasOwn(methodTimes(method),st.id))st.seconds=methodTimes(method)[st.id];});discardDraft();document.getElementById('dialog').close();notify('Applied '+format(seconds)+' s to '+n.name+'. Running updated model.');rerun();}catch(err){id('status').textContent=err.message;}};

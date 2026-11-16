@@ -19,6 +19,10 @@ The lab includes operations charts, material/worker/form process charts, scaled 
 
 The 3D floor opens by default. Its layer selector shows event playback, station utilization, or saved Present and Proposed flow routes. Capture a run in Work study to record its settings and outputs with a method. Use simulation data to trace one completed product, inspect station cycle times, or sample simulated equipment occupancy. Worker, form and reference-data worksheets retain simulation context while leaving real observations to the analyst. Apply a measured time to rerun the model, then capture the other method and compare throughput. In-progress worksheets have local draft recovery.
 
+## Staffed factory observation
+
+Open **Worker lab → Open staffed packing factory**. Follow a worker and expand the floor. Start an observation during replay, then use **Finish and chart → Use simulation data** to populate a worker process chart for that interval. Each task needs a free station server and one shared worker. Travel follows a common aisle at the configured speed, and planned stops hold the assigned worker. Workers share all manual tasks. The starter dimensions, times and staffing are illustrative. The Worker lab compares hands-on, walking and idle/wait time across the observation window. Capture Present and Proposed runs to compare staffing changes.
+
 ## Run locally
 
 Serve `dist` over HTTP so module workers can load:

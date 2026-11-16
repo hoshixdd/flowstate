@@ -1,6 +1,6 @@
 // Authoritative discrete-event engine for Flowstate.
 // Event priority is: releases/resumes, transfers/completions, then arrivals.
-const VERSION = 'flowstate-des-2.1';
+const VERSION = 'flowstate-des-2.2';
 
 function randomStream(seed) {
   let value = seed >>> 0;
@@ -83,6 +83,7 @@ function normalizeProducts(model) {
 function validateModel(model) {
   if (!model || !Array.isArray(model.nodes) || !Array.isArray(model.edges) || !model.nodes.length || model.nodes.length > 100 || model.edges.length > 300) return ['Use 1–100 stations and at most 300 connections.'];
   const issues = [], nodes = new Map(), outgoing = new Map(), incoming = new Map(), sources = [], sinks = [];
+  if(model.crew && (!Number.isInteger(model.crew.count)||model.crew.count<1||model.crew.count>16||!Number.isFinite(model.crew.speed)||model.crew.speed<.1||model.crew.speed>4||!Number.isFinite(model.crew.scale)||model.crew.scale<=0||model.crew.scale>100))issues.push('Choose 1–16 workers, walking speed 0.1–4 m/s and a valid floor scale.');
   for (const n of model.nodes) {
     if (!n || typeof n.id !== 'string' || !/^[\w-]{1,80}$/.test(n.id) || nodes.has(n.id) || ['__proto__', 'constructor', 'prototype'].includes(n.id) || !Object.hasOwn({ source: 1, sink: 1, processor: 1, inspection: 1, queue: 1 }, n.type) || typeof n.name !== 'string' || !n.name.trim() || n.name.length > 80 || !Number.isFinite(n.x) || !Number.isFinite(n.y) || Math.abs(n.x) > 100000 || Math.abs(n.y) > 100000) return ['A station has an invalid ID, name, type or position.'];
     nodes.set(n.id, n); outgoing.set(n.id, []); incoming.set(n.id, []);
@@ -144,6 +145,11 @@ function validateModel(model) {
   }
   return issues;
 }
+function workerPath(model,from,to){
+  const a=[from.x/36,from.y/30+1.16],b=[to.x/36,to.y/30+1.16];
+  const aisle=Math.max(...model.nodes.map(n=>n.y/30))+2.9;
+  return from.id===to.id?[a,b]:[a,[a[0],aisle],[b[0],aisle],b];
+}
 function simulateRun(model, settings, record = true) {
   const config = normalizeConfig(settings), issues = validateModel(model);
   if (issues.length) throw Error(issues.join(' '));
@@ -179,13 +185,21 @@ function simulateRun(model, settings, record = true) {
     trace(s.id, t, s.busy, explicit ? 0 : len, s.finished, active);
     if (explicit) trace(explicit.id, t, 0, len, s.starts, active);
   }
-  function start(n, s, job, t, joined) {
+  function start(n, s, job, t, joined, w=null) {
     let end = t + sample(n.seconds, n.distribution, rng.get(n.id));
     if (n.pauseLength > 0 && t < n.pauseStart && end > n.pauseStart) end += n.pauseLength;
     if (t >= warmup) { s.starts++; s.waitTotal += t - joined; }
     s.busy++; s.active.set(job.id, { start: t, end, productId: job.productId });
     logEvent('service-start', t, n.id, job, { end });
-    heap.push({ time: end, rank: 0, type: 'done', id: n.id, job });
+    if(w){
+      const stop=n.pauseStart;
+      if(offTime(n,t,end)>0){
+        segment(w,'Working',t,stop,n.id,n.id,job);
+        segment(w,'Waiting',stop,stop+n.pauseLength,n.id,n.id,job);
+        segment(w,'Working',stop+n.pauseLength,end,n.id,n.id,job);
+      }else segment(w,'Working',t,end,n.id,n.id,job);
+    }
+    heap.push({ time: end, rank: 0, type: 'done', id: n.id, job,w });
   }
   function visit(job, t) {
     while (job.position < job.route.length && nodes.get(job.route[job.position])?.type === 'queue') job.position++;
@@ -198,7 +212,9 @@ function simulateRun(model, settings, record = true) {
     }
     const s = stats.get(id); if (!s) throw Error('A product route must use processing stations and the sink.');
     const explicit = bufferFor(job); integral(s, t);
-    if (s.busy < s.capacity && !isPaused(n, t)) start(n, s, job, t, t);
+    if (s.busy+(reserved.get(n.id)||0)<s.capacity && !isPaused(n,t) && (!crew.length||crew.some(w=>!w.assigned))){
+      if(crew.length)assign(n,s,job,t,t);else start(n,s,job,t,t);
+    }
     else {
       const limit = explicit ? explicit.limit : n.limit;
       if (limit != null && s.queue.length - s.head >= limit) {
@@ -209,6 +225,35 @@ function simulateRun(model, settings, record = true) {
     }
     snapshot(s, t, job, explicit);
   }
+  // A server is reserved from dispatch until the worker finishes the job.
+  const crew=Array.from({length:model.crew?.count||0},(_,i)=>({id:i+1,station:source.id,assigned:false,segments:[]}));
+  const reserved=new Map();
+  function segment(w,kind,a,b,from,to,job,distance=0){
+    if(record&&b>a)w.segments.push({kind,start:a,end:b,from,to,job:job?.id??null,distance});
+  }
+  function assign(n,s,job,t,joined){
+    const w=crew.find(person=>!person.assigned);
+    w.assigned=true;
+    const path=workerPath(model,nodes.get(w.station),n);
+    const distance=path.slice(1).reduce((sum,p,i)=>sum+Math.hypot(p[0]-path[i][0],p[1]-path[i][1]),0)*model.crew.scale;
+    const end=t+distance/model.crew.speed;
+    segment(w,'Walking',t,end,w.station,n.id,job,distance);
+    reserved.set(n.id,(reserved.get(n.id)||0)+1);
+    heap.push({type:'at-station',time:end,rank:1,id:n.id,job,w,joined});
+  }
+  function dispatch(t){
+    while(crew.some(w=>!w.assigned)){
+      let best=null;
+      for(const n of stations){
+        const s=stats.get(n.id),head=s.queue[s.head];
+        if(head&&!isPaused(n,t)&&s.busy+(reserved.get(n.id)||0)<s.capacity&&(!best||head.time<best.head.time))best={n,s,head};
+      }
+      if(!best)break;
+      const {n,s,head}=best;integral(s,t);s.head++;
+      assign(n,s,head.job,t,head.time);snapshot(s,t,head.job,bufferFor(head.job));
+      if(s.head>256&&s.head*2>s.queue.length){s.queue=s.queue.slice(s.head);s.head=0;}
+    }
+  }
   const scheduleArrival = (product, time) => heap.push({ time, rank: 2, type: 'arrival', productId: product.id });
   for (const product of products) scheduleArrival(product, 0);
   for (const n of stations) if (n.pauseLength > 0) heap.push({ time: n.pauseStart + n.pauseLength, rank: 0, type: 'resume', id: n.id });
@@ -218,7 +263,18 @@ function simulateRun(model, settings, record = true) {
     if (t > horizon) break;
     if (++eventCount > 150000) throw Error('This run exceeds 150,000 events. Shorten the run or increase arrival intervals.');
     if (e.type === 'warmup') { for (const s of stats.values()) s.peak = s.queue.length - s.head; continue; }
+    if(e.type==='at-station'){
+      const n=nodes.get(e.id),s=stats.get(e.id);e.w.station=n.id;
+      if(isPaused(n,t)){
+        const until=n.pauseStart+n.pauseLength;
+        segment(e.w,'Waiting',t,until,n.id,n.id,e.job);
+        heap.push({...e,time:until});continue;
+      }
+      integral(s,t);reserved.set(n.id,reserved.get(n.id)-1);
+      start(n,s,e.job,t,e.joined,e.w);snapshot(s,t,e.job,bufferFor(e.job));continue;
+    }
     if (e.type === 'resume') {
+      if(crew.length){dispatch(t);continue;}
       const n = nodes.get(e.id), s = stats.get(e.id); integral(s, t);
       while (s.head < s.queue.length && s.busy < s.capacity) { const q = s.queue[s.head++]; start(n, s, q.job, t, q.time); }
       snapshot(s, t, null, null); continue;
@@ -236,7 +292,8 @@ function simulateRun(model, settings, record = true) {
     else {
       const n = nodes.get(e.id), s = stats.get(n.id); integral(s, t); s.active.delete(e.job.id); s.busy--; s.finished++;
       logEvent('service-complete', t, n.id, e.job);
-      if (s.head < s.queue.length && !isPaused(n, t)) { const queued = s.queue[s.head++]; start(n, s, queued.job, t, queued.time); if (s.head > 256 && s.head * 2 > s.queue.length) { s.queue = s.queue.slice(s.head); s.head = 0; } }
+      if(e.w)e.w.assigned=false;
+      if (!crew.length && s.head < s.queue.length && !isPaused(n, t)) { const queued = s.queue[s.head++]; start(n, s, queued.job, t, queued.time); if (s.head > 256 && s.head * 2 > s.queue.length) { s.queue = s.queue.slice(s.head); s.head = 0; } }
       let targetPosition = e.job.position + 1;
       if (n.type === 'inspection' && n.rework > 0 && rng.get(n.id)() * 100 < n.rework) {
         if (++e.job.visits > 100) throw Error('A unit exceeded 100 inspection returns. Lower rework or change its route.');
@@ -246,7 +303,18 @@ function simulateRun(model, settings, record = true) {
       e.job.position = targetPosition; logEvent('transfer', t, n.id, e.job, { nextStationId: e.job.route[targetPosition] ?? null });
       snapshot(s, t, e.job, bufferFor(e.job)); heap.push({ time: t, rank: 1, type: 'transfer', job: e.job });
     }
+    if(crew.length)dispatch(t);
   }
+  const workers=record?crew.map(w=>{
+    const intervals=[];let last=0,location=source.id;
+    for(const seg of w.segments){
+      if(seg.start>=horizon)break;
+      if(seg.start>last)intervals.push({kind:'Idle',start:last,end:seg.start,from:location,to:location,distance:0});
+      intervals.push(seg);last=seg.end;location=seg.to;
+    }
+    if(last<horizon)intervals.push({kind:'Idle',start:last,end:horizon,from:location,to:location,distance:0});
+    return {id:w.id,intervals};
+  }):[];
   const rows = stations.map(n => {
     const s = stats.get(n.id); integral(s, horizon);
     const available = window - offTime(n, warmup, horizon);
@@ -254,7 +322,7 @@ function simulateRun(model, settings, record = true) {
   });
   const cost = stations.reduce((a, n) => a + (n.hourly ?? 0) * (n.servers ?? 1) * window / 3600, 0);
   const bottleneck = rows.slice().sort((a, b) => b.avgQueue - a.avgQueue || b.util - a.util)[0];
-  return { version: VERSION, config, tracks, rows, arrivals: arrived, completed: observedFinished, totalCompleted: finished, totalArrivals: jobs, throughput: observedFinished / window * 3600, averageFlow: observedFinished ? totalFlow / observedFinished : null, rejected: observedRejected, wip: jobs - finished - rejected, reworked, cost, unitCost: observedFinished ? cost / observedFinished : null, bottleneck: bottleneck?.id ?? null, events: eventLog.length, processedEvents: eventCount, eventLog, eventLogTruncated: eventLog.length >= EVENT_LOG_LIMIT, productMetrics: [...productStats.values()] };
+  return { version: VERSION, config, tracks, rows, workers, arrivals: arrived, completed: observedFinished, totalCompleted: finished, totalArrivals: jobs, throughput: observedFinished / window * 3600, averageFlow: observedFinished ? totalFlow / observedFinished : null, rejected: observedRejected, wip: jobs - finished - rejected, reworked, cost, unitCost: observedFinished ? cost / observedFinished : null, bottleneck: bottleneck?.id ?? null, events: eventLog.length, processedEvents: eventCount, eventLog, eventLogTruncated: eventLog.length >= EVENT_LOG_LIMIT, productMetrics: [...productStats.values()] };
 }
 function frameAt(model, run, time) {
   const frame = {};
@@ -277,5 +345,5 @@ function sampleSummary(values) {
   const variance = values.reduce((sum, x) => sum + (x - mean) ** 2, 0) / (n - 1);
   return { n, mean, margin: T95[n - 1] * Math.sqrt(variance / n) };
 }
-export { simulateRun, normalizeConfig, validateModel, frameAt, sampleSummary, VERSION, mainRouteIds, normalizeProducts };
+export { workerPath, simulateRun, normalizeConfig, validateModel, frameAt, sampleSummary, VERSION, mainRouteIds, normalizeProducts };
 

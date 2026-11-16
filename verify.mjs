@@ -45,3 +45,22 @@ assert.equal(simulationWorksheet('operations',base,recording,'n2').rows.length,3
 const sample=simulationWorksheet('sampling',base,recording,'n2');
 assert.equal(sample.rows.reduce((s,r)=>s+r.count,0),100);
 console.log('PASS simulation-derived worksheets, routed jobs and reproducible samples');
+const packing=template('staffed');
+for(const count of [1,2,3]){
+  packing.crew.count=count;
+  const run=simulateRun(packing,{}), observation=simulationWorksheet('worker',packing,run,'n1',1,0,300);
+  assert.equal(run.completed,[10,49,86][count-1]);
+  assert.equal(run.workers.length,count);
+  assert.ok(Math.abs(observation.rows.reduce((total,r)=>total+r.seconds,0)-300)<1e-6);
+  assert.ok(observation.rows.some(r=>r.activity==='move'&&r.metres>0));
+  for(const worker of run.workers){
+    let end=0;
+    for(const seg of worker.intervals){assert.ok(Math.abs(seg.start-end)<1e-6);end=seg.end;}
+    assert.ok(end>=run.config.horizon);
+  }
+}
+packing.nodes[1].pauseStart=10;packing.nodes[1].pauseLength=50;
+const pausedCrew=simulateRun(packing,{horizon:90});
+assert.ok(pausedCrew.workers.some(w=>w.intervals.some(s=>s.kind==='Waiting')));
+assert.ok(pausedCrew.eventLog.filter(e=>e.stationId==='n1'&&e.type==='service-start').every(e=>e.time>=60));
+console.log('PASS staffed factory, non-overlapping worker histories, clipped observations and planned stops.');
