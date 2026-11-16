@@ -87,3 +87,19 @@ for(const [rate,catchRate,recover] of [[0,100,100],[100,0,100],[100,100,100],[10
 }
 const invalidQuality=structuredClone(qualityLine);invalidQuality.quality.detection=101;assert.throws(()=>simulateRun(invalidQuality,{}),/quality/);
 console.log('PASS causal fault creation, branch routing, repair labor, scrap conservation, escaped shipments, warm-up, and unique first-pass counts.');
+
+const roles=template('roles'),roleRun=simulateRun(roles,{});
+assert.equal(roleRun.completed,28);
+for(const e of roleRun.eventLog.filter(e=>e.type==='service-start'))assert.ok(roles.crew.roster[e.workerId-1].stations.includes(e.stationId));
+const crossTrained=structuredClone(roles);crossTrained.crew.roster[1].stations.push('n2');
+const crossRun=simulateRun(crossTrained,{});assert.equal(crossRun.completed,58);
+assert.ok(crossRun.workers[1].intervals.some(i=>i.kind==='Working'&&i.to==='n2'));
+assert.ok(crossRun.rows.find(n=>n.id==='n3').avgQueue>roleRun.rows.find(n=>n.id==='n3').avgQueue);
+const vacant=structuredClone(roles);vacant.crew.roster[1].stations=[];const blocked=simulateRun(vacant,{});
+assert.equal(blocked.completed,0);assert.ok(blocked.rows.find(s=>s.id==='n3').peak>0);
+assert.ok(blocked.workers[1].intervals.every(s=>s.kind==='Idle'));
+const legacy=template('staffed'),allSkilled=structuredClone(legacy);
+allSkilled.crew.roster=Array.from({length:2},()=>({role:'Operator',stations:['n1','n2','n3']}));
+assert.deepEqual(simulateRun(legacy,{}).tracks,simulateRun(allSkilled,{}).tracks);
+const badRoster=structuredClone(roles);badRoster.crew.roster[0].stations=['bogus'];assert.throws(()=>simulateRun(badRoster,{}),/Invalid worker roster/);
+console.log('PASS restricted crews, cross-training, uncovered stations, legacy dispatch parity and roster validation.');

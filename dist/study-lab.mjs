@@ -81,7 +81,7 @@ export function simulationWorksheet(topic,model,run,stationId,workerId=1,from=ru
       rows.push({description:i.kind+' · '+(i.from===i.to?name(i.to):name(i.from)+' → '+name(i.to)),activity,qty:1,seconds:end-start,metres:(i.distance||0)*(end-start)/(i.end-i.start),remarks:'W'+worker.id+' · '+format(start)+'–'+format(end)+' s'+(i.job?' · unit '+i.job:'')});
       if(rows.length>500)throw Error('Choose a shorter observation window (500 activities maximum per worksheet).');
     }
-    return {rows,provenance:stamp+' · worker '+worker.id+' · observed '+from+'–'+to+' s · simulated worker activity.'};
+    return {rows,provenance:stamp+' · worker '+worker.id+(worker.role?' ('+worker.role+')':'')+' · observed '+from+'–'+to+' s · simulated worker activity.'};
   }
   if(['worker','form','standards'].includes(topic))return {provenance:context+'. Record actual worker movement, document handling or reference times separately.'};
   if(topic==='sampling'){
@@ -229,7 +229,7 @@ export function openStudy({model,run,selected,topic='overview',initialWorker=1,r
     modal('Work study','<section id="ws-lab">'+source+evidence+'<div class="ws-tools"><label>Worksheet '+select('topic',Object.entries(topics).map(([k,v])=>[k,v[0]]),topic)+'</label><label>Method '+select('method',methods.map(m=>[m,m]),method)+'</label></div><p>'+e(topics[topic][1])+'</p><div class="ws-fields">'+form.map(f=>'<label>'+e(f[1])+control(f,t[f[0]],'')+'</label>').join('')+'</div>'+
       (cols.length?'<div class="ws-scroll"><table><thead><tr><th>#</th>'+cols.map(c=>'<th>'+e(c[1])+'</th>').join('')+'<th></th></tr></thead><tbody>'+t.rows.map((r,i)=>'<tr><td>'+(i+1)+'</td>'+cols.map(c=>'<td>'+control(c,r[c[0]],'data-row="'+i+'"')+'</td>').join('')+'<td><button data-remove="'+i+'" aria-label="Remove row '+(i+1)+'">×</button></td></tr>').join('')+'</tbody></table></div><button id="ws-add">Add row</button>':'')+
       (topic==='layout'?select('station',model.nodes.map(n=>[n.id,n.name]),'')+' <button id="ws-point">Add station waypoint</button><p>Click the floor plan to trace aisle turns, or enter coordinates in the table.</p>':'')+
-      (topic==='worker'&&run?.workers?.length?'<div class="ws-tools"><label>Observe worker '+select('person',run.workers.map(w=>[w.id,'Worker '+w.id]),workerId)+'</label><label>From second<input type="number" id="ws-from" value="'+from+'"></label><label>Through second<input type="number" id="ws-to" value="'+to+'"></label></div>':'')+
+      (topic==='worker'&&run?.workers?.length?'<div class="ws-tools"><label>Observe worker '+select('person',run.workers.map(w=>[w.id,'Worker '+w.id+(w.role?' · '+w.role:'')]),workerId)+'</label><label>From second<input type="number" id="ws-from" value="'+from+'"></label><label>Through second<input type="number" id="ws-to" value="'+to+'"></label></div>':'')+
       (run&&['material','operations','layout','form','worker','timing','sampling','standards'].includes(topic)?'<button id="ws-import">Use simulation '+((['form','standards'].includes(topic)||topic==='worker'&&!run.workers?.length)?'as study context':'data')+'</button>':'')+
       (topic==='productivity'&&run?'<button id="ws-use">Use '+e(run.completed)+' completed units from run</button>':'')+
       (topic==='timing'?'<button id="ws-watch">'+(watchStart===null?'Start observation':'Record elapsed seconds')+'</button>':'')+

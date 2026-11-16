@@ -488,7 +488,7 @@ export function createFactory(canvas, onSelect = () => {}, onWorker = () => {}) 
       cylinder(x,z,1.53,.19,.045,'#e7bb45',null);
       cylinder(x,z,.76,.20,.58,shirt,null);cylinder(x,z,1.06,.203,.065,'#d7e697',null);
       cylinder(x,z,1.35,.135,.25,'#bc9479',null);cylinder(x,z,1.54,.165,.14,'#f3cd50',null);
-      labels.push({n:{id:'worker-label-'+w.id,name:'W'+w.id+' · '+seg.kind},p:project([x,z,2.60]),state:{},active:false,person:true});
+      labels.push({n:{id:'worker-label-'+w.id,name:'W'+w.id+' · '+(w.role||seg.kind)},p:project([x,z,2.60]),state:{},active:false,person:true});
     }
   }
   function polygon(points){ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();}

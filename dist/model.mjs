@@ -1,5 +1,6 @@
 export const kinds = {source:'Source',processor:'Processor',queue:'Queue',inspection:'Inspection',sink:'Sink'};
 export const templates = {
+  roles:{title:'Packing crew assignment study',category:'Station assignment lab'},
   quality:{title:'Carton quality line',category:'Factory quality study'},
   lab:{title:'Assembly line',category:'IE classroom lab',names:['Arrivals','Preparation','Assembly','Packaging','Finished units'],times:[30,30,45,36,0]},
   staffed:{title:'Staffed packing factory',category:'Worker measurement lab',names:['Receiving','Prepare cartons','Fill cartons','Inspect and seal','Dispatch'],times:[30,25,40,22,0]},
@@ -7,6 +8,13 @@ export const templates = {
   campus:{title:'Campus service queue',category:'Campus services',names:['Student arrivals','Check-in','Document review','Release','Students served'],times:[120,60,180,90,0]}
 };
 export function template(key){
+ if(key==='roles'){
+   const model=template('staffed');
+   return {...model,...templates.roles,crew:{...model.crew,roster:[
+     {role:'Packing operator',stations:['n1','n2']},
+     {role:'Inspector',stations:['n3']}
+   ]}};
+ }
  if(key==='quality'){
    const layout=[
      ['receiving','Inbound pallets','source',36,42,20],

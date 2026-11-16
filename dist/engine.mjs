@@ -1,6 +1,6 @@
 // Authoritative discrete-event engine for Flowstate.
 // Event priority is: releases/resumes, transfers/completions, then arrivals.
-const VERSION = 'flowstate-des-2.3';
+const VERSION = 'flowstate-des-2.4';
 
 function randomStream(seed) {
   let value = seed >>> 0;
@@ -96,6 +96,13 @@ function validateModel(model) {
     if (n.hourly != null && (!Number.isFinite(n.hourly) || n.hourly < 0 || n.hourly > 1e7)) issues.push(n.name + ' has an invalid hourly cost.');
     if (n.pauseLength != null && (!Number.isFinite(n.pauseLength) || n.pauseLength < 0 || n.pauseLength > 604800 || !Number.isFinite(n.pauseStart) || n.pauseStart < 0 || n.pauseStart > 604800)) issues.push(n.name + ' has invalid downtime settings.');
     if (n.rework != null && (!Number.isFinite(n.rework) || n.rework < 0 || n.rework > 100)) issues.push(n.name + ' has an invalid rework percentage.');
+  }
+  const roster=model.crew?.roster;
+  if(roster!=null && (!Array.isArray(roster) || roster.length!==model.crew.count ||
+    roster.some(person=>!person || typeof person.role!=='string' || !person.role.trim() || person.role.length>48 ||
+      !Array.isArray(person.stations) || person.stations.length>100 || new Set(person.stations).size!==person.stations.length ||
+      person.stations.some(id=>!['processor','inspection'].includes(nodes.get(id)?.type))))) {
+    issues.push('Invalid worker roster. Use one role and a list of eligible stations for each worker.');
   }
   for (const edge of model.edges) {
     if (!Array.isArray(edge) || edge.length !== 2 || !nodes.has(edge[0]) || !nodes.has(edge[1]) || edge[0] === edge[1]) return ['A connection has a missing or invalid endpoint.'];
@@ -244,7 +251,7 @@ function simulateRun(model, settings, record = true) {
     if (n.pauseLength > 0 && t < n.pauseStart && end > n.pauseStart) end += n.pauseLength;
     if (t >= warmup) { s.starts++; s.waitTotal += t - joined; }
     s.busy++; s.active.set(job.id, { start: t, end, productId: job.productId });
-    logEvent('service-start', t, n.id, job, { end });
+    logEvent('service-start', t, n.id, job, w?{end,workerId:w.id}:{end});
     if(w){
       const stop=n.pauseStart;
       if(offTime(n,t,end)>0){
@@ -270,8 +277,9 @@ function simulateRun(model, settings, record = true) {
     }
     const s = stats.get(id); if (!s) throw Error('A product route must use processing stations and the sink.');
     const explicit = bufferFor(job); integral(s, t);
-    if (s.busy+(reserved.get(n.id)||0)<s.capacity && !isPaused(n,t) && (!crew.length||crew.some(w=>!w.assigned))){
-      if(crew.length)assign(n,s,job,t,t);else start(n,s,job,t,t);
+    const person=availableWorker(n.id);
+    if (s.busy+(reserved.get(n.id)||0)<s.capacity && !isPaused(n,t) && (!crew.length||person)){
+      if(person)assign(n,s,job,t,t,person);else start(n,s,job,t,t);
     }
     else {
       const limit = explicit ? explicit.limit : n.limit;
@@ -284,13 +292,16 @@ function simulateRun(model, settings, record = true) {
     snapshot(s, t, job, explicit);
   }
   // A server is reserved from dispatch until the worker finishes the job.
-  const crew=Array.from({length:model.crew?.count||0},(_,i)=>({id:i+1,station:source.id,assigned:false,segments:[]}));
+  const crew=Array.from({length:model.crew?.count||0},(_,i)=>{
+    const person=model.crew.roster?.[i];
+    return {id:i+1,role:person?.role??'',skills:person?new Set(person.stations):null,station:source.id,assigned:false,segments:[]};
+  });
+  function availableWorker(id){return crew.find(w=>!w.assigned && (!w.skills||w.skills.has(id)));}
   const reserved=new Map();
   function segment(w,kind,a,b,from,to,job,distance=0){
     if(record&&b>a)w.segments.push({kind,start:a,end:b,from,to,job:job?.id??null,distance});
   }
-  function assign(n,s,job,t,joined){
-    const w=crew.find(person=>!person.assigned);
+  function assign(n,s,job,t,joined,w){
     w.assigned=true;
     const path=workerPath(model,nodes.get(w.station),n);
     const distance=path.slice(1).reduce((sum,p,i)=>sum+Math.hypot(p[0]-path[i][0],p[1]-path[i][1]),0)*model.crew.scale;
@@ -304,11 +315,13 @@ function simulateRun(model, settings, record = true) {
       let best=null;
       for(const n of stations){
         const s=stats.get(n.id),head=s.queue[s.head];
-        if(head&&!isPaused(n,t)&&s.busy+(reserved.get(n.id)||0)<s.capacity&&(!best||head.time<best.head.time))best={n,s,head};
+        if(!head || isPaused(n,t) || s.busy+(reserved.get(n.id)||0)>=s.capacity || (best&&head.time>=best.head.time))continue;
+        const person=availableWorker(n.id);
+        if(person)best={n,s,head,person};
       }
       if(!best)break;
       const {n,s,head}=best;integral(s,t);s.head++;
-      assign(n,s,head.job,t,head.time);snapshot(s,t,head.job,bufferFor(head.job));
+      assign(n,s,head.job,t,head.time,best.person);snapshot(s,t,head.job,bufferFor(head.job));
       if(s.head>256&&s.head*2>s.queue.length){s.queue=s.queue.slice(s.head);s.head=0;}
     }
   }
@@ -374,7 +387,7 @@ function simulateRun(model, settings, record = true) {
       intervals.push(seg);last=seg.end;location=seg.to;
     }
     if(last<horizon)intervals.push({kind:'Idle',start:last,end:horizon,from:location,to:location,distance:0});
-    return {id:w.id,intervals};
+    return {id:w.id,role:w.role,intervals};
   }):[];
   const rows = stations.map(n => {
     const s = stats.get(n.id); integral(s, horizon);

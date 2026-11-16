@@ -48,7 +48,7 @@ function observerHud(run){
  const seg=w.intervals[lo-1];if(!seg)return;
  const station=m.nodes.find(n=>n.id===seg.to)?.name||'';
  const elapsed=Math.max(0,Math.min(cursor,seg.end)-seg.start);
- $('observerTitle').textContent='Worker '+id+' · '+seg.kind;
+ $('observerTitle').textContent='Worker '+id+(w.role?' · '+w.role:'')+' · '+seg.kind;
  $('observerTask').textContent=(seg.kind==='Walking'?'To ':'At ')+station+(seg.job?' · unit '+seg.job:'')+' · '+fmt(elapsed)+' s'+(observation?' · recording '+fmt(Math.max(0,cursor-observation.from))+' s':'');
  $('observerProgress').value=Math.min(1,elapsed/Math.max(.001,seg.end-seg.start));
 }
@@ -68,7 +68,7 @@ function render(){
  $('qualityStatus').textContent=quality?quality.detected+' diverted · '+quality.escaped+' shipped faulty · '+quality.scrapped+' scrapped':'Run this line to trace a carton.';
  $('nextFault').disabled=!result?.primary?.qualityTrace?.length;
  const people=result?.primary?.workers||[],follow=$('followWorker'),old=follow.value;
- $('crewReplay').hidden=!people.length;follow.innerHTML='<option value="0">Whole floor</option>'+people.map(w=>'<option value="'+w.id+'">Worker '+w.id+'</option>').join('');if(people.some(w=>w.id===Number(old)))follow.value=old;
+ $('crewReplay').hidden=!people.length;follow.innerHTML='<option value="0">Whole floor</option>'+people.map(w=>'<option value="'+w.id+'">Worker '+w.id+(w.role?' · '+escape(w.role):'')+'</option>').join('');if(people.some(w=>w.id===Number(old)))follow.value=old;
  const n=m.nodes.find(n=>n.id===selected)||m.nodes[0];selected=n?.id;
  $('title').textContent=m.title;$('category').textContent=m.category+' · Revision '+project.revision;$('save').textContent=warning||'Saved on this device';
  const products=normalizeProducts(m);$('undo').disabled=!past.length;$('redo').disabled=!future.length;$('count').textContent=m.nodes.length+' stations · '+m.edges.length+' connections · '+products.length+' product'+(products.length===1?'':'s');
@@ -131,7 +131,7 @@ function inspector(n){
    const other=m.edges.filter(e=>e[0]===n.id&&e[1]!==next&&e[1]!==$('next').value);
    m.edges=m.edges.filter(e=>e[0]!==n.id);if($('next').value)m.edges.push([n.id,$('next').value]);m.edges.push(...other);
  }});};
- $('remove').onclick=()=>commit(()=>{m.nodes=m.nodes.filter(s=>s.id!==n.id);m.edges=m.edges.filter(e=>!e.includes(n.id));});}
+ $('remove').onclick=()=>commit(()=>{m.nodes=m.nodes.filter(s=>s.id!==n.id);for(const p of m.crew?.roster||[])p.stations=p.stations.filter(id=>id!==n.id);m.edges=m.edges.filter(e=>!e.includes(n.id));});}
 function metric(label,val,desc){return '<div class="metric"><span>'+escape(label)+'</span><strong>'+escape(val)+'</strong><p>'+escape(desc)+'</p></div>';}
 function overview(){const p=m.nodes.filter(n=>['processor','inspection'].includes(n.type)),slow=p.slice().sort((a,b)=>b.seconds/(b.servers??1)-a.seconds/(a.servers??1))[0],good=!validateModel(m).length;
  $('idealMetrics').innerHTML=metric('Limiting station',good&&slow?slow.name:'—','Mean service capacity')+metric('Station limit',good&&slow?fmt(3600*(slow.servers??1)/slow.seconds)+' / h':'—','Before losses, starvation or rework')+metric('Service per pass',good?fmt(p.reduce((a,n)=>a+n.seconds,0))+' s':'—','Without waiting or repeat visits');}
@@ -174,7 +174,7 @@ function slug(name){return name.replace(/[^a-z0-9_-]+/gi,'-').slice(0,60)||'flow
 function validImport(m){
  if(!m||typeof m.title!=='string'||m.title.length>120||typeof m.category!=='string'||m.category.length>120||!Array.isArray(m.nodes)||m.nodes.length>100||!Array.isArray(m.edges)||m.edges.length>200)throw Error('Invalid project format.');
  if(!m.nodes.every(n=>n&&Object.hasOwn(kinds,n.type)&&typeof n.id==='string'&&/^[\w-]{1,80}$/.test(n.id)&&!['__proto__','constructor','prototype'].includes(n.id)&&typeof n.name==='string'&&n.name.length<=80&&Number.isFinite(n.x)&&Number.isFinite(n.y)&&Math.abs(n.x)<100001&&Math.abs(n.y)<100001&&Number.isFinite(n.seconds))||!m.edges.every(e=>Array.isArray(e)&&e.length===2&&e.every(v=>m.nodes.some(n=>n.id===v))))throw Error('Invalid station or connection.');
- const issues=validateModel(m);if(issues.some(s=>/Invalid quality|workers, walking speed|invalid ID|unknown distribution|1-64|invalid waiting|invalid hourly|valid positive|invalid rework/.test(s)))throw Error(issues.join(' '));
+ const issues=validateModel(m);if(issues.some(s=>/Invalid worker roster|Invalid quality|workers, walking speed|invalid ID|unknown distribution|1-64|invalid waiting|invalid hourly|valid positive|invalid rework/.test(s)))throw Error(issues.join(' '));
  return clone(m);
 }
 function activate(p){clearRun();project=p;db.active=p.id;m=p.model;selected=m.nodes.find(n=>n.type==='processor')?.id??m.nodes[0]?.id;past=[];future=[];save();$('dialog').close();render();factory.reset();runModel(true);}
@@ -211,6 +211,7 @@ function projectManager(archived=false){
  function capture(name){const r=result.primary;return {id:uuid(),name,model:clone(m),config:{...project.config},revision:project.revision,at:new Date().toISOString(),engine:VERSION,units:result.units.slice(),rate:result.throughput.mean,flow:r.averageFlow,cost:r.cost,events:r.events,productMetrics:clone(r.productMetrics??[])};}
 function differences(a,b){
  const changes=[];for(const k of ['horizon','warmup','seed','reps'])if(a.config[k]!==b.config[k])changes.push(k+' changed from '+a.config[k]+' to '+b.config[k]);
+ if(JSON.stringify(a.model.crew??null)!==JSON.stringify(b.model.crew??null))changes.push('Worker staffing or station assignments changed.');
  for(const n of b.model.nodes){const old=a.model.nodes.find(s=>s.id===n.id);if(!old){changes.push('Added '+n.name);continue;}
  const fields={name:'name',seconds:'time (s)',servers:'servers',limit:'waiting places',distribution:'distribution',rework:'rework (%)',reworkTo:'return station',hourly:'hourly cost',pauseStart:'stop starts (s)',pauseLength:'stop duration (s)'},fallback={servers:1,limit:'unlimited',distribution:'fixed',rework:0,hourly:0,pauseStart:0,pauseLength:0,reworkTo:'none'};
  for(const [k,label] of Object.entries(fields)){const x=old[k]??fallback[k],y=n[k]??fallback[k];if(x!==y)changes.push(n.name+' · '+label+' changed from '+x+' to '+y);}}
@@ -268,6 +269,11 @@ function openQualityFactory(){
  if(p)activate(p);else addProject(template('quality'));
  $('speed').value='1';setView('3d');
 }
+function openRolesFactory(){
+ const p=db.projects.find(p=>!p.archived&&p.model.category===templates.roles.category);
+ if(p)activate(p);else addProject(template('roles'));
+ $('speed').value='1';setView('3d');
+}
 function replayFault(event){
  stopPlaying();observation=null;$('dialog').close();cursor=event.time;selected=event.stationId;
  $('followWorker').value='0';setView('3d');render();factory.focus();paint();
@@ -298,20 +304,53 @@ $('nextFault').onclick=()=>{
 };
 function workersPanel(){
   const crew=m.crew||{count:2,speed:1.2,scale:1},r=result?.primary;
+  const stations=m.nodes.filter(n=>['processor','inspection'].includes(n.type));
+  const draft=clone(crew.roster||[]);
   const rows=(r?.workers||[]).map(w=>{
     const totals={Working:0,Walking:0,Waiting:0,Idle:0};let metres=0;
     for(const seg of w.intervals){
       const dt=Math.max(0,Math.min(seg.end,r.config.horizon)-Math.max(seg.start,r.config.warmup));
       totals[seg.kind]+=dt;metres+=dt/(seg.end-seg.start)*(seg.distance||0);
     }
-    return '<tr><th>W'+w.id+'</th>'+[totals.Working,totals.Walking,totals.Waiting+totals.Idle,metres].map(v=>'<td>'+fmt(v)+'</td>').join('')+'</tr>';
+    return '<tr><th>W'+w.id+(w.role?' · '+escape(w.role):'')+'</th>'+[totals.Working,totals.Walking,totals.Waiting+totals.Idle,metres].map(v=>'<td>'+fmt(v)+'</td>').join('')+'</tr>';
   }).join('');
-  modal('Worker measurement lab','<p>Each processing or inspection step needs one available worker and one free station server. Workers take the oldest available queued job and walk to it along the shared aisle.</p><form id="crewForm"><div class="grid2"><label>Shared workers<input id="crewCount" type="number" min="1" max="16" step="1" required value="'+escape(crew.count)+'"></label><label>Walking speed (m/s)<input id="crewSpeed" type="number" min=".1" max="4" step="any" required value="'+escape(crew.speed)+'"></label><label>Metres per 3D floor unit<input id="crewScale" type="number" min=".001" max="100" step="any" required value="'+escape(crew.scale)+'"></label></div><button class="primary">Apply staffing and run</button></form>'+
+  modal('Worker measurement lab','<p>Each processing or inspection step needs one available worker and one free station server. Available workers take the oldest queued job they are qualified to perform. They walk between assignments along the shared aisle.</p><form id="crewForm"><div class="grid2"><label>Workers on shift<input id="crewCount" type="number" min="1" max="16" step="1" required value="'+escape(crew.count)+'"></label><label>Walking speed (m/s)<input id="crewSpeed" type="number" min=".1" max="4" step="any" required value="'+escape(crew.speed)+'"></label><label>Metres per 3D floor unit<input id="crewScale" type="number" min=".001" max="100" step="any" required value="'+escape(crew.scale)+'"></label></div><button class="primary">Apply staffing and run</button></form>'+
     (rows?'<h3 class="subhead">Observed worker time</h3><div class="datagrid"><table><tr><th>Worker</th><th>Hands-on (s)</th><th>Walk (s)</th><th>Wait / idle (s)</th><th>Walk (m)</th></tr>'+rows+'</table></div><button id="observeWorker">Observe a worker in Work Study</button>':'')+
     '<div class="group"><button id="crewExample">Open staffed packing factory</button></div><p class="muted">The starter layout and times are illustrative. Use measured station times, floor scale and walking speed to represent your factory.</p>');
+  const apply=$('crewForm').querySelector('button');
+  apply.insertAdjacentHTML('beforebegin','<label class="checkline"><input id="useRoster" type="checkbox"> Assign workers by station</label><section id="rosterGrid"></section>');
+  $('useRoster').checked=!!crew.roster;
+  function renderRoster(){
+    const grid=$('rosterGrid'),count=$('crewCount').valueAsNumber;
+    if(!$('useRoster').checked || !Number.isInteger(count)||count<1||count>16){grid.replaceChildren();return;}
+    while(draft.length<count)draft.push({role:'Operator',stations:stations.map(n=>n.id)});
+    grid.innerHTML='<p>Select every station each worker is trained to operate. Jobs wait until a qualified worker is free.</p><div class="datagrid"><table class="roster"><thead><tr><th>Worker / role</th>'+stations.map(n=>'<th>'+escape(n.name)+'</th>').join('')+'</tr></thead><tbody>'+draft.slice(0,count).map((p,i)=>'<tr><th><label>W'+(i+1)+'<input aria-label="Worker '+(i+1)+' role" maxlength="48" required data-role="'+i+'" value="'+escape(p.role)+'"></label></th>'+stations.map((n,j)=>'<td><input type="checkbox" data-skill="'+i+'" data-station="'+j+'" aria-label="Worker '+(i+1)+' at '+escape(n.name)+'" '+(p.stations.includes(n.id)?'checked':'')+'></td>').join('')+'</tr>').join('')+'</tbody></table></div><p id="rosterCoverage" role="status"></p>';
+    function coverage(){
+      const vacant=stations.filter(n=>!draft.slice(0,count).some(p=>p.stations.includes(n.id)));
+      $('rosterCoverage').textContent=vacant.length?'Unstaffed: '+vacant.map(n=>n.name).join(', ')+'. Work arriving there will wait or be rejected if its buffer fills.':'Every station has at least one qualified worker.';
+    }
+    grid.querySelectorAll('[data-role]').forEach(input=>input.oninput=()=>{draft[+input.dataset.role].role=input.value;});
+    grid.querySelectorAll('[data-skill]').forEach(input=>input.onchange=()=>{
+      const person=draft[+input.dataset.skill],id=stations[+input.dataset.station].id;
+      person.stations=input.checked?[...person.stations,id]:person.stations.filter(s=>s!==id);coverage();
+    });
+    coverage();
+  }
+  $('useRoster').onchange=renderRoster;$('crewCount').oninput=renderRoster;renderRoster();
+  $('crewExample').insertAdjacentHTML('afterend',' <button id="rolesExample">Open crew assignment example</button>');
+  $('rolesExample').onclick=openRolesFactory;
+  const prior=project.staffingBaseline;
+  if(r&&prior?.revision===project.revision){
+    const table=prior.queues.map(row=>{const after=r.rows.find(s=>s.id===row.id);return after?'<tr><th>'+escape(after.name)+'</th><td>'+fmt(row.mean)+'</td><td>'+fmt(after.avgQueue)+'</td></tr>':'';}).join('');
+    $('crewForm').insertAdjacentHTML('afterend','<h3>Staffing change · same shift</h3><p>Completed units: <b>'+prior.completed+' → '+r.completed+'</b>. Seed '+r.config.seed+', first replication.</p><div class="datagrid"><table><thead><tr><th>Mean queue, units</th><th>Before</th><th>After</th></tr></thead><tbody>'+table+'</tbody></table></div>');
+  }
   $('crewForm').onsubmit=e=>{e.preventDefault();const next={count:$('crewCount').valueAsNumber,speed:$('crewSpeed').valueAsNumber,scale:$('crewScale').valueAsNumber};
+    if($('useRoster').checked){
+      next.roster=draft.slice(0,next.count).map(p=>({...p,role:p.role.trim()}));
+      if(next.roster.some(p=>!p.role)){notify('Give each worker a role.');return;}
+    }
     if(!m.nodes.some(n=>['processor','inspection'].includes(n.type))){notify('Add a processing station first.');return;}
-    commit(()=>{m.crew=next;});$('dialog').close();runModel(true);};
+    commit(()=>{m.crew=next;project.staffingBaseline=r?{revision:project.revision+1,completed:r.completed,queues:r.rows.map(s=>({id:s.id,mean:s.avgQueue}))}:null;});$('dialog').close();runModel(true);};
   $('crewExample').onclick=openWorkerFactory;
   if($('observeWorker'))$('observeWorker').onclick=()=>enterStudy('worker');
 }
@@ -342,5 +381,5 @@ $('nextActivity').onclick=()=>{
  setView('3d');paint();
 };
 if(!warning)save();render();
-if(location.hash==='#quality-factory')openQualityFactory();else if(location.hash==='#worker-factory')openWorkerFactory();else runModel(true);
-window.addEventListener('hashchange',()=>{if(location.hash==='#quality-factory')openQualityFactory();else if(location.hash==='#worker-factory')openWorkerFactory();});
+if(location.hash==='#staffing-study')openRolesFactory();else if(location.hash==='#quality-factory')openQualityFactory();else if(location.hash==='#worker-factory')openWorkerFactory();else runModel(true);
+window.addEventListener('hashchange',()=>{if(location.hash==='#staffing-study')openRolesFactory();else if(location.hash==='#quality-factory')openQualityFactory();else if(location.hash==='#worker-factory')openWorkerFactory();});
