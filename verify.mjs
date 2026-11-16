@@ -64,3 +64,26 @@ const pausedCrew=simulateRun(packing,{horizon:90});
 assert.ok(pausedCrew.workers.some(w=>w.intervals.some(s=>s.kind==='Waiting')));
 assert.ok(pausedCrew.eventLog.filter(e=>e.stationId==='n1'&&e.type==='service-start').every(e=>e.time>=60));
 console.log('PASS staffed factory, non-overlapping worker histories, clipped observations and planned stops.');
+
+const qualityLine=template('quality');
+assert.deepEqual(validateModel(qualityLine),[]);
+const study=simulateRun(qualityLine,{seed:42});
+assert.deepEqual(study.quality,simulateRun(qualityLine,{seed:42},false).quality);
+assert.equal(study.quality.goodShipped+study.quality.escaped,study.completed);
+assert.equal(study.totalArrivals,study.wip+study.completed+study.totalScrap+study.rejected);
+assert.ok(study.workers.some(w=>w.intervals.some(s=>s.kind==='Working'&&s.to==='repair')));
+assert.ok(study.qualityTrace.every((e,i,rows)=>!i||rows[i-1].time<=e.time));
+for(const [rate,catchRate,recover] of [[0,100,100],[100,0,100],[100,100,100],[100,100,0]]){
+  const line=structuredClone(qualityLine);
+  line.quality.modes.forEach(m=>m.rate=rate);line.quality.detection=catchRate;line.quality.recovery=recover;
+  const r=simulateRun(line,{horizon:1800,warmup:300}),s=r.quality;
+  assert.ok(s.inspected>0);assert.equal(s.firstGood,rate?0:s.inspected);
+  assert.equal(s.goodShipped+s.escaped,r.completed);
+  assert.equal(r.totalArrivals,r.wip+r.totalCompleted+r.totalScrap);
+  assert.ok(s.counts.every(c=>c.faults===(rate?c.opportunities:0)));
+  if(rate&&!catchRate){assert.equal(s.detected,0);assert.equal(s.escaped,r.completed);assert.ok(s.escaped>0);}
+  if(rate&&catchRate){assert.equal(s.detected,s.inspected);assert.equal(s.escaped,0);assert.ok(recover?s.repaired>0:s.scrapped>0);}
+  if(!rate){assert.equal(s.detected,0);assert.equal(s.escaped,0);}
+}
+const invalidQuality=structuredClone(qualityLine);invalidQuality.quality.detection=101;assert.throws(()=>simulateRun(invalidQuality,{}),/quality/);
+console.log('PASS causal fault creation, branch routing, repair labor, scrap conservation, escaped shipments, warm-up, and unique first-pass counts.');

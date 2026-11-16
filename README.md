@@ -50,3 +50,13 @@ The verification script covers deterministic reference runs, queues, downtime, r
 ## Scope
 
 This repository is a local-first prototype and MVP vertical slice. Authentication, server-side authorization, hosted persistence, background job infrastructure, billing, and production operations remain future SaaS work.
+
+## Factory quality study
+
+Open **Quality lab** or use `Flowstate.html#quality-factory`. The seven-station packing line starts with five shared workers. Forming, filling and sealing independently introduce faults when service finishes. The gate tests each faulty carton once, with one detection probability covering all its fault modes. Detected cartons take a worker and bench time. A successful repair clears all faults, a failed repair scraps the carton, and an undetected faulty carton ships. Station buffer rejections are separate. The demo assumes no false inspection alarms, independent source faults, and empty starting inventory.
+
+Use **Review shift** for fault counts by source, carton history and replay. Source bars count occurrences. First-pass quality counts unique conforming cartons divided by all cartons first inspected, using the simulated true condition. The reported counts use the observation window for each event independently. Work crossing the window can affect totals. The CSV contains quality events in that window, while tracing a selected carton includes its earlier history.
+
+In **Workplace data**, enter source-level sample counts for each defect, inspection sensitivity and successful repair percentage. Set measured station times, shift duration, arrivals, floor scale and staffing in the studio. Enter good output from a comparable independent shift to check the simulated baseline. **Test a change** compares the current model with one proposed rate over 2–30 matched seeds. The interval is a paired Student t interval across simulated shifts. Counts and intervals reflect the model assumptions. Verify causal hypotheses and actual savings with a workplace trial.
+
+Methods: [ASQ check sheets](https://asq.org/quality-resources/check-sheet), [ASQ Pareto analysis](https://asq.org/quality-resources/pareto), [NIST fraction nonconforming](https://www.itl.nist.gov/div898/handbook/pmc/section3/pmc332.htm), [NIST on credibility of manufacturing digital twins](https://www.nist.gov/publications/credibility-consideration-digital-twins-manufacturing).

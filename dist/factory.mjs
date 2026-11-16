@@ -10,6 +10,31 @@ export function createFactory(canvas, onSelect = () => {}, onWorker = () => {}) 
     cream:'#e8eaf0', white:'#fbfcff', rubber:'#465856', amber:'#ffad30', orange:'#f26e23', ink:'#223c35' };
   const camera = { angle:.43, elevation:.59, zoom:1 };
   let layer='live',run=null;
+  let qualityTrace=null;
+  const signalsByStation=new Map();
+  const qualitySignals={
+    fault:{color:'#ffa738',label:'Fault introduced'},
+    detected:{color:'#ffad46',label:'Defect detected'},
+    repair:{color:'#75d6bd',label:'Repair'},
+    scrap:{color:'#d95047',label:'Scrapped carton'},
+    escape:{color:'#f27067',label:'Escaped defect'}
+  };
+  function stationSignal(id){
+    if(qualityTrace!==run?.qualityTrace){
+      signalsByStation.clear();qualityTrace=run?.qualityTrace;
+      for(const event of qualityTrace||[]){
+        if(!Object.hasOwn(qualitySignals,event.kind))continue;
+        if(!signalsByStation.has(event.stationId))signalsByStation.set(event.stationId,[]);
+        signalsByStation.get(event.stationId).push(event);
+      }
+    }
+    const events=signalsByStation.get(id);
+    if(!events)return null;
+    let lo=0,hi=events.length;
+    while(lo<hi){const mid=(lo+hi)>>1;if(events[mid].time<=clock)lo=mid+1;else hi=mid;}
+    const event=events[lo-1];
+    return event&&clock-event.time<9?qualitySignals[event.kind]:null;
+  }
   let model, frame={}, selected, width=1, height=1, scale=1, centerX=0, centerZ=0, screenY=0;
   let faces=[], labels=[], hitFaces=[], hitLabels=[], pointer=null, disposed=false;
   let ca,sa,ce,se;
@@ -166,6 +191,127 @@ export function createFactory(canvas, onSelect = () => {}, onWorker = () => {}) 
     const crossing=x0+Math.min(2.8,span*.19);
     for(let j=0;j<6;j++)plane(crossing+j*.20,aisle,.102,1.02,.021,'#f5f2e2',1);
   }
+  function qualityFixture(n,state,s,cyl,line,signal){
+    const {x,z,id,fixture}=n;
+    const metal='#a6b4b6',frameColor='#425965',navy='#355d70',linen='#e5e5d8';
+    const saffron='#ecae47',black='#344449',cardboard='#bd8f63';
+    const blue='#438b9c',coral='#b6654d',green='#6ad9b8';
+    const busy=state.busy>0,p=busy?state.progress||0:0;
+    function conveyor(){
+      s(0,0,.13,2.52,1.04,.58,navy);
+      s(0,0,.71,2.68,1.13,.10,metal);s(0,0,.81,2.55,.88,.055,black);
+      for(const side of [-1,1])s(0,side*.51,.83,2.62,.075,.10,linen);
+    }
+    function consoleAt(a,d,base){
+      s(a,d,base,.10,.10,.24,frameColor);
+      s(a,d,base+.24,.44,.14,.30,black);
+      s(a,d+.075,base+.28,.32,.016,.18,signal?signal.color:'#8ad3d7');
+    }
+    function tote(a,d,base,w,l,color){
+      s(a,d,base,w,l,.17,color);
+      for(const sign of [-1,1]){
+        s(a+sign*(w-.06)/2,d,base+.17,.06,l,.13,color);
+        s(a,d+sign*(l-.06)/2,base+.17,w-.12,.06,.13,color);
+      }
+    }
+    switch(fixture){
+      case 'receiving': {
+        // Fork-entry pallet, incoming cases and a short gravity roller table.
+        for(const a of [-1.20,-.72,-.24])s(a,.02,.13,.14,1.56,.16,cardboard);
+        for(let i=0;i<5;i++)s(-.72,-.65+i*.34,.29,1.26,.23,.09,'#cdab81');
+        for(const a of [-1.03,-.40])for(const d of [-.36,.28])crate(x+a,z+d,.38,.57,id);
+        crate(x-.75,z-.08,.80,.54,id);
+        for(const d of [-.58,.58])s(.70,d,.13,1.28,.13,.59,navy);
+        for(let i=0;i<6;i++)line([.16+i*.21,-.55,.72],[.16+i*.21,.55,.72],.066,metal);
+        consoleAt(1.12,-.72,.78);
+        break;
+      }
+      case 'forming': {
+        conveyor();
+        // Magazine of folded blanks feeds a pair of upright forming paddles.
+        for(let i=0;i<6;i++)s(-.75,-.09,.87+i*.048,.81,.83,.034,i%2?cardboard:'#d1ad7d');
+        const spread=.44-(busy?.14*Math.sin(Math.PI*p):0);
+        for(const side of [-1,1])s(.38+side*spread,0,.87,.09,.71,.60,blue);
+        if(busy)tote(.38,0,.87,.55,.59,cardboard);
+        consoleAt(-1.02,-.68,.93);break;
+      }
+      case 'filler': {
+        conveyor();
+        for(const a of [-.73,.73])s(a,-.44,.87,.105,.12,1.36,frameColor);
+        s(0,-.44,2.20,1.62,.15,.12,frameColor);
+        cyl(0,-.04,1.83,.53,.69,metal);
+        cyl(0,-.04,2.50,.56,.07,linen);cyl(0,-.04,2.57,.12,.07,frameColor);
+        // Tapered hopper and dispensing nozzle remain visible above the carton.
+        const slices=10;
+        for(let i=0;i<slices;i++){
+          const a=i*2*Math.PI/slices,b=(i+1)*2*Math.PI/slices;
+          const ring=(ang,r,h)=>[x+r*Math.cos(ang),z-.04+r*Math.sin(ang),h];
+          face([ring(a,.15,1.49),ring(b,.15,1.49),ring(b,.53,1.83),ring(a,.53,1.83)],shade(metal,.86+.15*Math.sin(a)),3,id);
+        }
+        cyl(0,-.04,1.39,.105,.13,frameColor);
+        if(busy){tote(0,0,.87,.69,.59,cardboard);if(p>.20&&p<.80)cyl(0,-.04,1.08,.047,.31,saffron);}
+        consoleAt(-1.04,.25,.88);break;
+      }
+      case 'sealer': {
+        conveyor();
+        for(const d of [-.49,.49])s(.09,d,.92,.16,.13,.86,navy);
+        s(.09,0,1.78,.32,1.21,.15,linen);
+        line([.09,-.10,1.96],[.09,.11,1.96],.34,cardboard);
+        line([.09,.12,1.96],[.09,.15,1.96],.12,black);
+        const head=busy?1.42-.14*Math.sin(Math.PI*p):1.44;
+        s(.09,0,head,.44,.41,1.80-head,metal);
+        if(busy)crate(x-.75+1.5*p,z,.87,.56,id);
+        consoleAt(-1.03,-.67,.87);break;
+      }
+      case 'vision': {
+        conveyor();
+        for(const d of [-.50,.50])s(.18,d,.92,.12,.12,1.26,frameColor);
+        s(.18,0,2.13,.26,1.15,.14,metal);
+        s(.18,0,1.86,.36,.38,.29,navy);cyl(.18,0,1.77,.117,.10,black);
+        if(busy){
+          const bx=-.72+p*1.44;
+          crate(x+bx,z,.87,.51,id);
+          if(Math.abs(bx-.18)<.25)s(.18,0,1.244,.027,.39,.014,signal?signal.color:'#5bdac4');
+        }
+        consoleAt(-.93,.15,.91);
+        tote(.87,-.60,.14,.70,.52,coral);break;
+      }
+      case 'repair': {
+        for(const a of [-1.04,1.04])for(const d of [-.47,.47])s(a,d,.13,.11,.11,.75,navy);
+        s(0,0,.88,2.39,1.28,.12,linen);
+        s(-.62,-.60,1,.99,.12,.90,blue);
+        for(const a of [-.91,-.63,-.35]){
+          s(a,-.52,1.33,.055,.055,.36,metal);s(a,-.50,1.28,.085,.065,.16,saffron);
+        }
+        s(.36,.02,1,.77,.59,.027,'#527b73');
+        if(busy)tote(.36,.03,1.03,.59,.47,cardboard);
+        tote(.94,-.37,1,.40,.38,coral);
+        for(let i=0;i<3;i++){
+          s(-.67,.02,.22+i*.18,.72,.76,.155,navy);
+          s(-.67,.41,.31+i*.18,.26,.04,.044,metal);
+        }
+        break;
+      }
+      case 'shipping': {
+        for(const a of [-1.20,1.20])for(const d of [-.56,.56])s(a,d,.13,.105,.13,1.82,navy);
+        for(const h of [.24,1.07,1.91]){
+          s(0,0,h,2.55,1.25,.11,metal);s(0,.63,h,2.55,.07,.13,saffron);
+        }
+        for(let i=0;i<Math.min(8,state.completed||0);i++){
+          const a=(i%4-1.5)*.55,base=i<4?.36:1.19;
+          crate(x+a,z,base,.48,id);s(a,.196,base+.11,.17,.025,.10,linen);
+        }
+        break;
+      }
+      default:return false;
+    }
+    // Each station has a stack light. An event remains visible for nine replay seconds.
+    const a=1.31,d=-.71;
+    cyl(a,d,.13,.096,.10,frameColor);cyl(a,d,.23,.043,1.46,metal);
+    const color=signal?.color||(state.paused?saffron:busy?green:'#7e95a1');
+    cyl(a,d,1.69,.098,.21,color);cyl(a,d,1.90,.103,.045,black);
+    return true;
+  }
   function station(n,state,index,campus) {
     const {x,z,id,type}=n;
     const s=(dx,dz,b,w,l,h,c,rot=0)=>slab(x+dx,z+dz,b,w,l,h,c,3,id,rot);
@@ -181,7 +327,8 @@ export function createFactory(canvas, onSelect = () => {}, onWorker = () => {}) 
     }
     slab(x,z,.015,3.25,2.62,.10,'#6c8377',2,id);
     // Recessed station perimeter light and front-panel service vents.
-    const edgeColor=state.paused?'#ffae53':busy?'#6fe8dd':'#95b0c8';
+    const signal=stationSignal(id);
+    const edgeColor=signal?.color||(state.paused?'#ffae53':busy?'#6fe8dd':'#95b0c8');
     s(0,1.27,.115,2.72,.038,.045,edgeColor);
     for(const side of [-1,1])s(side*1.45,1.16,.125,.15,.16,.04,steel);
     if(id===selected){
@@ -190,6 +337,7 @@ export function createFactory(canvas, onSelect = () => {}, onWorker = () => {}) 
         plane(x+a*1.71,z+d*1.07,.105,.5,.123,'#d8d970',2,id);
       }
     }
+    function standardEquipment(){
     if(campus){
       if(type==='queue'){
         for(const d of [-.65,.05,.75])for(const a of [-.8,.25]){
@@ -274,11 +422,13 @@ export function createFactory(canvas, onSelect = () => {}, onWorker = () => {}) 
       if(busy){if(campus)person(x-.32,z+.90,teal,id);else if(!model.crew)crate(x+.62,z+.47,.93,.43,id);}
       for(let i=1;i<Math.min(busy,5);i++){const bx=x-1.55+(i-1)*.53;if(campus)person(bx,z+1.05,teal,id);else crate(bx,z+1.07,.13,.38,id);}
     }
+    }
+    if(!n.fixture||!qualityFixture(n,state,s,cyl,line,signal))standardEquipment();
     for(let i=0;i<Math.min(waiting,8);i++){
       const a=x-1.19+(i%4)*.60,d=z+(type==='queue'&&!campus?-.29:1.52)+Math.floor(i/4)*.49;
       if(campus)person(a,d,i%2?teal:'#7998aa',id);else crate(a,d,type==='queue'?.39:.02,.43,id);
     }
-    labels.push({n,p:project(vector(x,z,0)),state,active:id===selected});
+    labels.push({n,p:project(vector(x,z,0)),state,signal,active:id===selected});
   }
   function workerPose(w){
       if(!w)return null;
@@ -312,13 +462,26 @@ export function createFactory(canvas, onSelect = () => {}, onWorker = () => {}) 
       }
       const stride=moving?Math.sin(clock*5+w.id)*.18:0,shirt=['#257d88','#4569a3','#8875a6','#52816a'][(w.id-1)%4];
       const at=(side,forward,h)=>[x-dz*side+dx*forward,z+dx*side+dz*forward,h];
+      const fixture=working?model.nodes.find(n=>n.id===seg.to)?.fixture:null;
+      const cycle=Math.sin(clock*3+w.id);
       for(const side of [-1,1]){
         const foot=side*stride;
-        rod(at(side*.095,0,.78),at(side*.095,foot,.12),.077,'#34495a',null);
+        const knee=at(side*.095,.055+foot*.6,.43);
+        rod(at(side*.095,0,.78),knee,.089,'#34495a',null);
+        rod(knee,at(side*.095,foot,.12),.073,'#34495a',null);
         rod(at(side*.095,foot-.04,.095),at(side*.095,foot+.14,.095),.083,'#26323d',null);
-        const reach=working?.36+.13*Math.sin(clock*3):-.5*foot;
+        // The operator scans a label, steadies a carton or reaches for the bench tools.
+        const reach=working?.36+.13*cycle*(fixture==='repair'?side:1):-.5*foot;
         const elbow=at(side*.23,reach*.5,1.02);
-        rod(at(side*.18,0,1.30),elbow,.067,shirt,null);rod(elbow,at(side*.17,reach,working?1.08:.86),.056,'#bd9478',null);
+        const hand=at(side*.17,reach,working?1.08:.86);
+        rod(at(side*.18,0,1.30),elbow,.067,shirt,null);rod(elbow,hand,.056,'#bd9478',null);
+        if(side===1&&fixture==='vision'){
+          rod(hand,at(.17,reach+.02,1.22),.045,'#374e59',null);
+          rod(at(.17,reach+.01,1.22),at(.17,reach+.16,1.24),.067,'#49859a',null);
+        }else if(side===1&&fixture==='repair'){
+          rod(hand,at(.17,reach+.10,1.10),.039,'#e3a34c',null);
+          rod(at(.17,reach+.10,1.10),at(.17,reach+.22,1.10),.016,'#bac7ca',null);
+        }
       }
       // PPE and side-specific hands keep the selected operator readable in close-up.
       const face=at(0,.113,1.43);cylinder(face[0],face[1],face[2],.074,.08,'#bc9479',null);
@@ -376,11 +539,12 @@ export function createFactory(canvas, onSelect = () => {}, onWorker = () => {}) 
       const name=item.n.name.length>19?item.n.name.slice(0,17)+'…':item.n.name;
       const queued=Number(item.state.waiting)||0, text=layer==='load'&&run?.rows.some(r=>r.id===item.n.id)?name+' · '+Math.round(100*run.rows.find(r=>r.id===item.n.id).util)+'%':name+(queued?' · '+queued+' waiting':'');
       ctx.font=(item.active?'600 ':'500 ')+'11px "Segoe UI",sans-serif';
-      const bw=ctx.measureText(text).width+19,bh=21,left=Math.max(3,Math.min(width-bw-3,item.p[0]-bw/2)),top=item.p[1]+Math.max(9,scale*.74);
+      const badgeText=item.signal?name+' · '+item.signal.label:text;
+      const bw=ctx.measureText(badgeText).width+19,bh=21,left=Math.max(3,Math.min(width-bw-3,item.p[0]-bw/2)),top=item.p[1]+Math.max(9,scale*.74);
       if((target&&!item.person&&item.n.id!==target.id)||item.p[0]<0||item.p[0]>width||top<0||top>height-3||occupied.some(r=>left<r.x+r.w+3&&left+bw>r.x-3&&top<r.y+r.h+2&&top+bh>r.y-2))continue;
       const r={x:left,y:top,w:bw,h:bh,id:item.n.id};occupied.push(r);hitLabels.push({...r,worker:item.person?Number(item.n.id.slice(13)):0});
       ctx.beginPath();ctx.roundRect(left,top,bw,bh,5);ctx.fillStyle=item.active?'#c9f4ff':'rgba(16,32,52,.94)';ctx.fill();ctx.strokeStyle=item.active?'#dce6a0':'#75877b';ctx.lineWidth=.8;ctx.stroke();
-      ctx.fillStyle=item.active?'#273529':'#e0e6da';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,left+bw/2,top+bh/2);
+      ctx.fillStyle=item.signal?(item.active?'#654411':item.signal.color):item.active?'#273529':'#e0e6da';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(badgeText,left+bw/2,top+bh/2);
     }
   }
   function pick(x,y){

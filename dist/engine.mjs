@@ -1,6 +1,6 @@
 // Authoritative discrete-event engine for Flowstate.
 // Event priority is: releases/resumes, transfers/completions, then arrivals.
-const VERSION = 'flowstate-des-2.2';
+const VERSION = 'flowstate-des-2.3';
 
 function randomStream(seed) {
   let value = seed >>> 0;
@@ -143,6 +143,21 @@ function validateModel(model) {
     }
     if (p.route.length && !p.route.some(id => ['processor', 'inspection'].includes(nodes.get(id)?.type))) issues.push(p.name + ' needs at least one processing station.');
   }
+  if (model.quality) {
+    const q = model.quality, percent = v => Number.isFinite(v) && v >= 0 && v <= 100;
+    if (nodes.get(q.gate)?.type !== 'inspection' || nodes.get(q.repair)?.type !== 'processor' ||
+        !percent(q.detection) || !percent(q.recovery) || !Array.isArray(q.modes) || !q.modes.length || q.modes.length > 20 ||
+        q.modes.some(m => !m || !/^[a-z][\w-]{0,39}$/.test(m.id) || typeof m.name !== 'string' || !m.name.trim() || m.name.length > 80 ||
+          nodes.get(m.station)?.type !== 'processor' || !percent(m.rate)) || new Set(q.modes.map(m=>m.id)).size !== q.modes.length) {
+      issues.push('Invalid quality setup. Check fault sources, inspection gate, repair bench and percentages.');
+    } else if (products.some(p => {
+      const route = p.route.length ? p.route : mainRouteIds(model), gate = route.indexOf(q.gate);
+      return gate < 0 || route.includes(q.repair) || !outgoing.get(q.repair).includes(route[gate+1]) ||
+        q.modes.some(m => route.indexOf(m.station) < 0 || route.indexOf(m.station) >= gate);
+    }) || model.nodes.some(n=>n.type==='inspection' && n.rework>0) || !outgoing.get(q.gate).includes(q.repair)) {
+      issues.push('Invalid quality route. All products must pass fault sources before the gate. Connect the gate to the separate repair bench and disable other inspection returns.');
+    }
+  }
   return issues;
 }
 function workerPath(model,from,to){
@@ -160,6 +175,45 @@ function simulateRun(model, settings, record = true) {
   const rng = new Map(model.nodes.map((n, i) => [n.id, randomStream(seed + Math.imul(i + 1, 2654435761))]));
   const arrivalRng = products.map((p, i) => [p.id, products.length === 1 ? rng.get(source.id) : randomStream((seed ^ hashText(p.id) ^ Math.imul(i + 1, 2246822519)) >>> 0)]);
   const queueBefore = new Map();
+  const q = model.quality;
+  const quality = q ? {inspected:0, firstGood:0, detected:0, repaired:0, scrapped:0, escaped:0, goodShipped:0,
+    counts:q.modes.map(m=>({id:m.id,name:m.name,station:m.station,faults:0,opportunities:0}))} : null;
+  const qualityTrace=[];
+  let totalScrap=0;
+  // Key each quality draw to its carton so prevention trials retain matched exposure.
+  const occurs=(job,key,rate)=>randomStream((seed ^ hashText(job.id+'|'+key))>>>0)()*100 < rate;
+  function qualityEvent(kind,t,stationId,job,mode){
+    if(record)qualityTrace.push({kind,time:t,stationId,jobId:job.id,mode});
+  }
+  function finishQualityStep(n,job,t){
+    const observed=t>=warmup;
+    for(const [i,mode] of q.modes.entries()){
+      if(mode.station!==n.id)continue;
+      if(observed)quality.counts[i].opportunities++;
+      if(occurs(job,mode.id,mode.rate)){
+        (job.faults??=[]).push(mode.id);
+        if(observed)quality.counts[i].faults++;
+        qualityEvent('fault',t,n.id,job,mode.id);
+      }
+    }
+    if(n.id===q.gate){
+      if(observed){quality.inspected++;if(!job.faults?.length)quality.firstGood++;}
+      if(job.faults?.length && occurs(job,'gate-detection',q.detection)){
+        if(observed)quality.detected++;
+        reworked++;productStats.get(job.productId).reworked++;
+        qualityEvent('detected',t,n.id,job,job.faults.join(','));
+        job.route.splice(job.position+1,0,q.repair);
+      }
+    }
+    if(n.id===q.repair){
+      const recovered=occurs(job,'repair-recovery',q.recovery);
+      if(observed)quality[recovered?'repaired':'scrapped']++;
+      qualityEvent(recovered?'repair':'scrap',t,n.id,job,job.faults.join(','));
+      if(!recovered){totalScrap++;return false;}
+      job.faults=[];
+    }
+    return true;
+  }
   for (const p of products) for (let i = 1; i < p.route.length; i++) if (nodes.get(p.route[i - 1])?.type === 'queue') queueBefore.set(p.route[i], nodes.get(p.route[i - 1]));
   const stats = new Map(stations.map(n => [n.id, { id: n.id, name: n.name, capacity: n.servers ?? 1, queue: [], head: 0, busy: 0, active: new Map(), last: 0, busyArea: 0, queueArea: 0, peak: 0, waitTotal: 0, starts: 0, finished: 0, drops: 0 }]));
   const tracks = Object.fromEntries(model.nodes.map(n => [n.id, []])), heap = new EventHeap(), eventLog = [], EVENT_LOG_LIMIT = 50000;
@@ -206,6 +260,10 @@ function simulateRun(model, settings, record = true) {
     const id = job.route[job.position], n = nodes.get(id);
     if (!n) throw Error('A product route points to a missing station.');
     if (id === sink.id) {
+      if(q){
+        if(t>=warmup)quality[job.faults?.length?'escaped':'goodShipped']++;
+        if(job.faults?.length)qualityEvent('escape',t,id,job,job.faults.join(','));
+      }
       finished++; const ps = productStats.get(job.productId); ps.completed++;
       if (t >= warmup) { observedFinished++; totalFlow += t - job.entered; }
       logEvent('departure', t, id, job); trace(id, t, 0, 0, finished); return;
@@ -295,6 +353,9 @@ function simulateRun(model, settings, record = true) {
       if(e.w)e.w.assigned=false;
       if (!crew.length && s.head < s.queue.length && !isPaused(n, t)) { const queued = s.queue[s.head++]; start(n, s, queued.job, t, queued.time); if (s.head > 256 && s.head * 2 > s.queue.length) { s.queue = s.queue.slice(s.head); s.head = 0; } }
       let targetPosition = e.job.position + 1;
+      if(q && !finishQualityStep(n,e.job,t)){
+        snapshot(s,t,e.job,bufferFor(e.job));if(crew.length)dispatch(t);continue;
+      }
       if (n.type === 'inspection' && n.rework > 0 && rng.get(n.id)() * 100 < n.rework) {
         if (++e.job.visits > 100) throw Error('A unit exceeded 100 inspection returns. Lower rework or change its route.');
         targetPosition = e.job.route.indexOf(n.reworkTo); if (targetPosition < 0) throw Error('Rework destination is not on the product route.');
@@ -322,7 +383,7 @@ function simulateRun(model, settings, record = true) {
   });
   const cost = stations.reduce((a, n) => a + (n.hourly ?? 0) * (n.servers ?? 1) * window / 3600, 0);
   const bottleneck = rows.slice().sort((a, b) => b.avgQueue - a.avgQueue || b.util - a.util)[0];
-  return { version: VERSION, config, tracks, rows, workers, arrivals: arrived, completed: observedFinished, totalCompleted: finished, totalArrivals: jobs, throughput: observedFinished / window * 3600, averageFlow: observedFinished ? totalFlow / observedFinished : null, rejected: observedRejected, wip: jobs - finished - rejected, reworked, cost, unitCost: observedFinished ? cost / observedFinished : null, bottleneck: bottleneck?.id ?? null, events: eventLog.length, processedEvents: eventCount, eventLog, eventLogTruncated: eventLog.length >= EVENT_LOG_LIMIT, productMetrics: [...productStats.values()] };
+  return { version: VERSION, config, tracks, rows, workers, quality, qualityTrace, totalScrap, arrivals: arrived, completed: observedFinished, totalCompleted: finished, totalArrivals: jobs, throughput: observedFinished / window * 3600, averageFlow: observedFinished ? totalFlow / observedFinished : null, rejected: observedRejected, wip: jobs - finished - rejected - totalScrap, reworked, cost, unitCost: observedFinished ? cost / observedFinished : null, bottleneck: bottleneck?.id ?? null, events: eventLog.length, processedEvents: eventCount, eventLog, eventLogTruncated: eventLog.length >= EVENT_LOG_LIMIT, productMetrics: [...productStats.values()] };
 }
 function frameAt(model, run, time) {
   const frame = {};

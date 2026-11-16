@@ -1,4 +1,5 @@
 import {openStudy} from './study-lab.mjs';
+import {openQualityLab} from './quality-lab.mjs';
 import {kinds,templates,template} from './model.mjs';
 import {validateModel,normalizeConfig,frameAt,VERSION,mainRouteIds,normalizeProducts} from './engine.mjs';
 import {createFactory} from './factory.mjs';
@@ -62,6 +63,10 @@ function play(){
 $('play').onclick=play;$('scrub').oninput=()=>{stopPlaying();cursor=+$('scrub').value;paint();};
 $('stationPick').onchange=()=>selectStation($('stationPick').value);
 function render(){
+ $('qualityDeck').hidden=!m.quality;
+ const quality=result?.primary?.quality;
+ $('qualityStatus').textContent=quality?quality.detected+' diverted · '+quality.escaped+' shipped faulty · '+quality.scrapped+' scrapped':'Run this line to trace a carton.';
+ $('nextFault').disabled=!result?.primary?.qualityTrace?.length;
  const people=result?.primary?.workers||[],follow=$('followWorker'),old=follow.value;
  $('crewReplay').hidden=!people.length;follow.innerHTML='<option value="0">Whole floor</option>'+people.map(w=>'<option value="'+w.id+'">Worker '+w.id+'</option>').join('');if(people.some(w=>w.id===Number(old)))follow.value=old;
  const n=m.nodes.find(n=>n.id===selected)||m.nodes[0];selected=n?.id;
@@ -116,13 +121,16 @@ function inspector(n){
  (timed?'<label>Timing distribution<select id="distribution">'+options([['fixed','Fixed'],['uniform','Uniform · ±25%'],['exponential','Exponential']],n.distribution??'fixed')+'</select></label>':'')+
  (proc?field('Parallel servers','servers',n.servers??1,1,64)+field('Cost per server-hour (₱)','hourly',n.hourly??0,0,10000000,'any')+field('Planned stop starts at (s)','pauseStart',n.pauseStart??0,0,604800)+field('Planned stop duration (s)','pauseLength',n.pauseLength??0,0,604800):'')+
  (proc||n.type==='queue'?field('Waiting places · blank = unlimited','limit',n.limit??'',0,100000)+'<p class="muted">FIFO. A full buffer rejects new units. An upstream queue station sets the buffer limit.</p>':'')+
- (n.type==='inspection'?field('Inspection rework (%)','rework',n.rework??0,0,100,'any')+'<label>Rework destination<select id="reworkTo">'+options([['','Select station'],...m.nodes.filter(s=>['processor','inspection'].includes(s.type)).map(s=>[s.id,s.name])],n.reworkTo??'')+'</select></label>':'')+'</details>':'')+
+ (n.type==='inspection'&&!m.quality?field('Inspection rework (%)','rework',n.rework??0,0,100,'any')+'<label>Rework destination<select id="reworkTo">'+options([['','Select station'],...m.nodes.filter(s=>['processor','inspection'].includes(s.type)).map(s=>[s.id,s.name])],n.reworkTo??'')+'</select></label>':'')+'</details>':'')+
  '<div><button class="primary">Apply edits</button><button type="button" id="remove" class="danger">Remove</button></div></form>';
  $('edit').onsubmit=e=>{e.preventDefault();const name=$('name').value.trim();if(!name){notify('Give the station a name.');return;}if(timed&&!Number($('seconds').value)){notify('Enter a positive time.');return;}if(proc&&!Number($('servers').value)){notify('Choose a positive number of servers.');return;}
  commit(()=>{n.name=name;if(timed){n.seconds=+$('seconds').value;n.distribution=$('distribution').value;if(n.type==='source'&&ensureProducts().length===1){ensureProducts()[0].interval=n.seconds;ensureProducts()[0].distribution=n.distribution;}}if(proc){n.servers=+$('servers').value;n.hourly=+$('hourly').value;n.pauseStart=+$('pauseStart').value;n.pauseLength=+$('pauseLength').value;}
  if($('limit'))n.limit=$('limit').value===''?null:+$('limit').value;
- if(n.type==='inspection'){n.rework=+$('rework').value;n.reworkTo=$('reworkTo').value;}
- if($('next')){m.edges=m.edges.filter(e=>e[0]!==n.id);if($('next').value)m.edges.push([n.id,$('next').value]);}});};
+ if($('rework')){n.rework=+$('rework').value;n.reworkTo=$('reworkTo').value;}
+ if($('next')&&$('next').value!==(next??'')){
+   const other=m.edges.filter(e=>e[0]===n.id&&e[1]!==next&&e[1]!==$('next').value);
+   m.edges=m.edges.filter(e=>e[0]!==n.id);if($('next').value)m.edges.push([n.id,$('next').value]);m.edges.push(...other);
+ }});};
  $('remove').onclick=()=>commit(()=>{m.nodes=m.nodes.filter(s=>s.id!==n.id);m.edges=m.edges.filter(e=>!e.includes(n.id));});}
 function metric(label,val,desc){return '<div class="metric"><span>'+escape(label)+'</span><strong>'+escape(val)+'</strong><p>'+escape(desc)+'</p></div>';}
 function overview(){const p=m.nodes.filter(n=>['processor','inspection'].includes(n.type)),slow=p.slice().sort((a,b)=>b.seconds/(b.servers??1)-a.seconds/(a.servers??1))[0],good=!validateModel(m).length;
@@ -166,7 +174,7 @@ function slug(name){return name.replace(/[^a-z0-9_-]+/gi,'-').slice(0,60)||'flow
 function validImport(m){
  if(!m||typeof m.title!=='string'||m.title.length>120||typeof m.category!=='string'||m.category.length>120||!Array.isArray(m.nodes)||m.nodes.length>100||!Array.isArray(m.edges)||m.edges.length>200)throw Error('Invalid project format.');
  if(!m.nodes.every(n=>n&&Object.hasOwn(kinds,n.type)&&typeof n.id==='string'&&/^[\w-]{1,80}$/.test(n.id)&&!['__proto__','constructor','prototype'].includes(n.id)&&typeof n.name==='string'&&n.name.length<=80&&Number.isFinite(n.x)&&Number.isFinite(n.y)&&Math.abs(n.x)<100001&&Math.abs(n.y)<100001&&Number.isFinite(n.seconds))||!m.edges.every(e=>Array.isArray(e)&&e.length===2&&e.every(v=>m.nodes.some(n=>n.id===v))))throw Error('Invalid station or connection.');
- const issues=validateModel(m);if(issues.some(s=>/workers, walking speed|invalid ID|unknown distribution|1–64|invalid waiting|invalid hourly|valid positive|invalid rework/.test(s)))throw Error(issues.join(' '));
+ const issues=validateModel(m);if(issues.some(s=>/Invalid quality|workers, walking speed|invalid ID|unknown distribution|1-64|invalid waiting|invalid hourly|valid positive|invalid rework/.test(s)))throw Error(issues.join(' '));
  return clone(m);
 }
 function activate(p){clearRun();project=p;db.active=p.id;m=p.model;selected=m.nodes.find(n=>n.type==='processor')?.id??m.nodes[0]?.id;past=[];future=[];save();$('dialog').close();render();factory.reset();runModel(true);}
@@ -255,6 +263,39 @@ function openWorkerFactory(){
   if(existing)activate(existing);else addProject(template('staffed'));
   $('speed').value='1';setView('3d');
 }
+function openQualityFactory(){
+ const p=db.projects.find(p=>!p.archived&&p.model.quality);
+ if(p)activate(p);else addProject(template('quality'));
+ $('speed').value='1';setView('3d');
+}
+function replayFault(event){
+ stopPlaying();observation=null;$('dialog').close();cursor=event.time;selected=event.stationId;
+ $('followWorker').value='0';setView('3d');render();factory.focus();paint();
+ const name=m.nodes.find(n=>n.id===selected)?.name??selected;
+ $('qualityStatus').textContent='Carton '+event.jobId+' · '+name+' · '+event.kind+' · '+timeLabel(cursor);
+ $('stage').scrollIntoView({block:'center'});
+}
+function qualityPanel(){
+ if(!m.quality){openQualityFactory();return;}
+ stopPlaying();const owner=project,revision=owner.revision;
+ openQualityLab({model:m,run:result?.primary,config:project.config,escape,modal,download,seek:replayFault,
+   apply:q=>{commit(()=>{m.quality=q;});$('dialog').close();runModel(true);},
+   previous:()=>owner.qualityTrial?.revision===revision?owner.qualityTrial.report:null,
+   openProposal:candidate=>{candidate.title=(m.title+' · proposed').slice(0,120);addProject(candidate,project.config);},
+   saveTrial:report=>{if(project===owner&&owner.revision===revision){owner.qualityTrial={revision,report};save();}},
+   trial:(proposed,reps)=>new Promise((resolve,reject)=>{
+     const job=new Worker(workerURL,{type:'module'});
+     job.onmessage=e=>{if(e.data.progress)return;job.terminate();if(e.data.error)reject(Error(e.data.error));else resolve(e.data.comparison);};
+     job.onerror=e=>{job.terminate();reject(Error(e.message||'Quality trial failed.'));};
+     job.postMessage({mode:'quality-trial',model:m,proposed,config:{...project.config,reps}});
+   })
+ });
+}
+$('qualityOpen').onclick=qualityPanel;$('qualityReview').onclick=qualityPanel;
+$('nextFault').onclick=()=>{
+ const trace=result?.primary?.qualityTrace;if(!trace?.length)return;
+ replayFault(trace.find(e=>e.time>cursor+.000001)||trace[0]);
+};
 function workersPanel(){
   const crew=m.crew||{count:2,speed:1.2,scale:1},r=result?.primary;
   const rows=(r?.workers||[]).map(w=>{
@@ -301,4 +342,5 @@ $('nextActivity').onclick=()=>{
  setView('3d');paint();
 };
 if(!warning)save();render();
-if(location.hash==='#worker-factory')openWorkerFactory();else runModel(true);
+if(location.hash==='#quality-factory')openQualityFactory();else if(location.hash==='#worker-factory')openWorkerFactory();else runModel(true);
+window.addEventListener('hashchange',()=>{if(location.hash==='#quality-factory')openQualityFactory();else if(location.hash==='#worker-factory')openWorkerFactory();});

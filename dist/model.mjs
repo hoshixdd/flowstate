@@ -1,11 +1,32 @@
 export const kinds = {source:'Source',processor:'Processor',queue:'Queue',inspection:'Inspection',sink:'Sink'};
 export const templates = {
+  quality:{title:'Carton quality line',category:'Factory quality study'},
   lab:{title:'Assembly line',category:'IE classroom lab',names:['Arrivals','Preparation','Assembly','Packaging','Finished units'],times:[30,30,45,36,0]},
   staffed:{title:'Staffed packing factory',category:'Worker measurement lab',names:['Receiving','Prepare cartons','Fill cartons','Inspect and seal','Dispatch'],times:[30,25,40,22,0]},
   production:{title:'Choco Bomb production',category:'Small production',names:['Ingredients','Mixing','Shaping','Packing','Finished boxes'],times:[40,35,55,40,0]},
   campus:{title:'Campus service queue',category:'Campus services',names:['Student arrivals','Check-in','Document review','Release','Students served'],times:[120,60,180,90,0]}
 };
 export function template(key){
+ if(key==='quality'){
+   const layout=[
+     ['receiving','Inbound pallets','source',36,42,20],
+     ['forming','Carton former','processor',268,42,15],
+     ['filler','Dosing hopper','processor',502,42,24],
+     ['sealer','Case sealer','processor',692,170,18],
+     ['vision','Inspection gate','inspection',475,232,12],
+     ['repair','Rework bench','processor',472,355,36],
+     ['shipping','Dispatch pallets','sink',160,232,0]
+   ];
+   return {version:1,title:templates.quality.title,category:templates.quality.category,crew:{count:5,speed:1.2,scale:.6},
+     nodes:layout.map(([id,name,type,x,y,seconds])=>({id,fixture:id,name,type,x,y,seconds})),
+     edges:[['receiving','forming'],['forming','filler'],['filler','sealer'],['sealer','vision'],['vision','shipping'],['vision','repair'],['repair','shipping']],
+     products:[{id:'carton',name:'Carton',color:'#e7ad64',interval:20,distribution:'fixed',route:[]}],
+     quality:{gate:'vision',repair:'repair',detection:85,recovery:90,modes:[
+       {id:'fold',name:'Crushed fold',station:'forming',rate:5},
+       {id:'dose',name:'Incorrect fill',station:'filler',rate:13},
+       {id:'seal',name:'Open seam',station:'sealer',rate:8}
+     ]}};
+ }
  const t=templates[key], positions=[[36,64],[307,64],[578,64],[578,226],[307,226]];
  return {...(key==='staffed'?{crew:{count:2,speed:1.2,scale:1}}:{}),version:1,title:t.title,category:t.category,nodes:t.names.map((name,i)=>({id:'n'+i,name,type:i===0?'source':i===4?'sink':'processor',seconds:t.times[i],x:positions[i][0],y:positions[i][1]})),edges:[['n0','n1'],['n1','n2'],['n2','n3'],['n3','n4']],products:[{id:'unit',name:'Unit',color:'#d8fc81',interval:t.times[0],distribution:'fixed',route:[]}]};
 }
