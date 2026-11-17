@@ -7,7 +7,22 @@ function evaluate(model,config,trace,onProgress){
 self.onmessage=e=>{
  const {model,config,mode}=e.data;let progress=0;const tick=()=>self.postMessage({progress:++progress});
  try{
- if(mode==='tournament'){
+ if(mode==='quality-trial'){
+   const proposed=e.data.proposed, measures=['goodShipped','escaped','detected','scrapped','faults'];
+   const series=Object.fromEntries(measures.map(key=>[key,{before:[],after:[],delta:[]}]));
+   for(let i=0;i<config.reps;i++){
+     const settings={...config,seed:(config.seed+i)>>>0};
+     const before=simulateRun(model,settings,false).quality,after=simulateRun(proposed,settings,false).quality;
+     for(const key of measures){
+       const value=q=>key==='faults'?q.counts.reduce((a,r)=>a+r.faults,0):q[key];
+       series[key].before.push(value(before));series[key].after.push(value(after));series[key].delta.push(value(after)-value(before));
+     }
+     tick();
+   }
+   self.postMessage({comparison:Object.fromEntries(measures.map(key=>[key,{
+     before:sampleSummary(series[key].before).mean, after:sampleSummary(series[key].after).mean, delta:sampleSummary(series[key].delta)
+   }]))});
+ }else if(mode==='tournament'){
    const stations=model.nodes.filter(n=>['processor','inspection'].includes(n.type)&&(n.servers??1)<64);
    if(stations.length>12||!stations.length||stations.length*config.reps>120)throw Error('Capacity experiments support 1–12 eligible stations and at most 120 candidate replications. Reduce replications or model size.');
    const base=evaluate(model,config,false,tick), alternatives=[];
