@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {simulateRun,frameAt,validateModel,sampleSummary} from './dist/engine.mjs';
+import {workerPath,pathLength,simulateRun,frameAt,validateModel,sampleSummary} from './dist/engine.mjs';
 import {template} from './dist/model.mjs';
 const base=template('lab');
 const stop=structuredClone(base);stop.nodes[1].pauseStart=10;stop.nodes[1].pauseLength=10;
@@ -103,3 +103,24 @@ allSkilled.crew.roster=Array.from({length:2},()=>({role:'Operator',stations:['n1
 assert.deepEqual(simulateRun(legacy,{}).tracks,simulateRun(allSkilled,{}).tracks);
 const badRoster=structuredClone(roles);badRoster.crew.roster[0].stations=['bogus'];assert.throws(()=>simulateRun(badRoster,{}),/Invalid worker roster/);
 console.log('PASS restricted crews, cross-training, uncovered stations, legacy dispatch parity and roster validation.');
+
+const aisleStudy=template('walking');
+const [prep,fill]=aisleStudy.nodes.slice(1,3);
+assert.deepEqual(workerPath(aisleStudy,prep,fill),workerPath(aisleStudy,fill,prep).reverse());
+const originalAisle=simulateRun(aisleStudy,{});
+assert.equal(originalAisle.completed,28);
+const shortAisle=structuredClone(aisleStudy);
+shortAisle.walkingRoutes[0]={from:'n1',to:'n2',via:[],metres:8};
+const newLayout=simulateRun(shortAisle,{});
+assert.equal(newLayout.completed,36);
+for(const r of [originalAisle,newLayout]){
+  const trips=r.workers.flatMap(w=>w.intervals).filter(i=>i.kind==='Walking'&&[i.from,i.to].sort().join(',')==='n1,n2');
+  assert.ok(trips.length>1);
+  for(const leg of trips){assert.equal(leg.distance,r===originalAisle?22:8);assert.ok(Math.abs((leg.end-leg.start)*aisleStudy.crew.speed-leg.distance)<1e-8);}
+}
+shortAisle.walkingRoutes[0].metres=null;shortAisle.crew.scale=2;
+const geometric=simulateRun(shortAisle,{}).workers[0].intervals.find(i=>i.from==='n1'&&i.to==='n2');
+assert.equal(geometric.distance,2*pathLength(workerPath(shortAisle,prep,fill)));
+shortAisle.walkingRoutes.push({from:'n2',to:'n1',via:[]});assert.throws(()=>simulateRun(shortAisle,{}),/Invalid walking route/);
+shortAisle.walkingRoutes=[{from:'missing',to:'n1',via:[]}];assert.throws(()=>simulateRun(shortAisle,{}),/Invalid walking route/);
+console.log('PASS measured and scaled walking, reverse trips, cross-training compatibility and invalid routes.');

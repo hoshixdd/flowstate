@@ -1,3 +1,4 @@
+import {openWalkingLab} from './walking-lab.mjs';
 import {openStudy} from './study-lab.mjs';
 import {openQualityLab} from './quality-lab.mjs';
 import {kinds,templates,template} from './model.mjs';
@@ -131,7 +132,7 @@ function inspector(n){
    const other=m.edges.filter(e=>e[0]===n.id&&e[1]!==next&&e[1]!==$('next').value);
    m.edges=m.edges.filter(e=>e[0]!==n.id);if($('next').value)m.edges.push([n.id,$('next').value]);m.edges.push(...other);
  }});};
- $('remove').onclick=()=>commit(()=>{m.nodes=m.nodes.filter(s=>s.id!==n.id);for(const p of m.crew?.roster||[])p.stations=p.stations.filter(id=>id!==n.id);m.edges=m.edges.filter(e=>!e.includes(n.id));});}
+ $('remove').onclick=()=>commit(()=>{m.nodes=m.nodes.filter(s=>s.id!==n.id);if(m.walkingRoutes)m.walkingRoutes=m.walkingRoutes.filter(r=>r.from!==n.id&&r.to!==n.id);for(const p of m.crew?.roster||[])p.stations=p.stations.filter(id=>id!==n.id);m.edges=m.edges.filter(e=>!e.includes(n.id));});}
 function metric(label,val,desc){return '<div class="metric"><span>'+escape(label)+'</span><strong>'+escape(val)+'</strong><p>'+escape(desc)+'</p></div>';}
 function overview(){const p=m.nodes.filter(n=>['processor','inspection'].includes(n.type)),slow=p.slice().sort((a,b)=>b.seconds/(b.servers??1)-a.seconds/(a.servers??1))[0],good=!validateModel(m).length;
  $('idealMetrics').innerHTML=metric('Limiting station',good&&slow?slow.name:'—','Mean service capacity')+metric('Station limit',good&&slow?fmt(3600*(slow.servers??1)/slow.seconds)+' / h':'—','Before losses, starvation or rework')+metric('Service per pass',good?fmt(p.reduce((a,n)=>a+n.seconds,0))+' s':'—','Without waiting or repeat visits');}
@@ -174,7 +175,7 @@ function slug(name){return name.replace(/[^a-z0-9_-]+/gi,'-').slice(0,60)||'flow
 function validImport(m){
  if(!m||typeof m.title!=='string'||m.title.length>120||typeof m.category!=='string'||m.category.length>120||!Array.isArray(m.nodes)||m.nodes.length>100||!Array.isArray(m.edges)||m.edges.length>200)throw Error('Invalid project format.');
  if(!m.nodes.every(n=>n&&Object.hasOwn(kinds,n.type)&&typeof n.id==='string'&&/^[\w-]{1,80}$/.test(n.id)&&!['__proto__','constructor','prototype'].includes(n.id)&&typeof n.name==='string'&&n.name.length<=80&&Number.isFinite(n.x)&&Number.isFinite(n.y)&&Math.abs(n.x)<100001&&Math.abs(n.y)<100001&&Number.isFinite(n.seconds))||!m.edges.every(e=>Array.isArray(e)&&e.length===2&&e.every(v=>m.nodes.some(n=>n.id===v))))throw Error('Invalid station or connection.');
- const issues=validateModel(m);if(issues.some(s=>/Invalid worker roster|Invalid quality|workers, walking speed|invalid ID|unknown distribution|1-64|invalid waiting|invalid hourly|valid positive|invalid rework/.test(s)))throw Error(issues.join(' '));
+ const issues=validateModel(m);if(issues.some(s=>/Invalid walking route|Invalid worker roster|Invalid quality|workers, walking speed|invalid ID|unknown distribution|1-64|invalid waiting|invalid hourly|valid positive|invalid rework/.test(s)))throw Error(issues.join(' '));
  return clone(m);
 }
 function activate(p){clearRun();project=p;db.active=p.id;m=p.model;selected=m.nodes.find(n=>n.type==='processor')?.id??m.nodes[0]?.id;past=[];future=[];save();$('dialog').close();render();factory.reset();runModel(true);}
@@ -211,6 +212,7 @@ function projectManager(archived=false){
  function capture(name){const r=result.primary;return {id:uuid(),name,model:clone(m),config:{...project.config},revision:project.revision,at:new Date().toISOString(),engine:VERSION,units:result.units.slice(),rate:result.throughput.mean,flow:r.averageFlow,cost:r.cost,events:r.events,productMetrics:clone(r.productMetrics??[])};}
 function differences(a,b){
  const changes=[];for(const k of ['horizon','warmup','seed','reps'])if(a.config[k]!==b.config[k])changes.push(k+' changed from '+a.config[k]+' to '+b.config[k]);
+ if(JSON.stringify(a.model.walkingRoutes??[])!==JSON.stringify(b.model.walkingRoutes??[]))changes.push('Measured walking routes changed.');
  if(JSON.stringify(a.model.crew??null)!==JSON.stringify(b.model.crew??null))changes.push('Worker staffing or station assignments changed.');
  for(const n of b.model.nodes){const old=a.model.nodes.find(s=>s.id===n.id);if(!old){changes.push('Added '+n.name);continue;}
  const fields={name:'name',seconds:'time (s)',servers:'servers',limit:'waiting places',distribution:'distribution',rework:'rework (%)',reworkTo:'return station',hourly:'hourly cost',pauseStart:'stop starts (s)',pauseLength:'stop duration (s)'},fallback={servers:1,limit:'unlimited',distribution:'fixed',rework:0,hourly:0,pauseStart:0,pauseLength:0,reworkTo:'none'};
@@ -269,6 +271,19 @@ function openQualityFactory(){
  if(p)activate(p);else addProject(template('quality'));
  $('speed').value='1';setView('3d');
 }
+function openWalkingFactory(){
+ const p=db.projects.find(p=>!p.archived&&p.model.category===templates.walking.category);
+ if(p)activate(p);else addProject(template('walking'));
+ $('speed').value='1';setView('3d');
+}
+$('walking').onclick=()=>{
+ stopPlaying();
+ openWalkingLab({model:m,run:result?.primary,baseline:project.layoutBaseline?.revision===project.revision?project.layoutBaseline:null,modal,escape,staff:workersPanel,example:openWalkingFactory,
+   apply:(routes,summary)=>{
+     commit(()=>{m.walkingRoutes=routes;project.layoutBaseline=summary?{...summary,revision:project.revision+1}:null;});
+     $('dialog').close();runModel(true);
+   }});
+};
 function openRolesFactory(){
  const p=db.projects.find(p=>!p.archived&&p.model.category===templates.roles.category);
  if(p)activate(p);else addProject(template('roles'));
@@ -381,5 +396,5 @@ $('nextActivity').onclick=()=>{
  setView('3d');paint();
 };
 if(!warning)save();render();
-if(location.hash==='#staffing-study')openRolesFactory();else if(location.hash==='#quality-factory')openQualityFactory();else if(location.hash==='#worker-factory')openWorkerFactory();else runModel(true);
-window.addEventListener('hashchange',()=>{if(location.hash==='#staffing-study')openRolesFactory();else if(location.hash==='#quality-factory')openQualityFactory();else if(location.hash==='#worker-factory')openWorkerFactory();});
+if(location.hash==='#walking-study')openWalkingFactory();else if(location.hash==='#staffing-study')openRolesFactory();else if(location.hash==='#quality-factory')openQualityFactory();else if(location.hash==='#worker-factory')openWorkerFactory();else runModel(true);
+window.addEventListener('hashchange',()=>{if(location.hash==='#walking-study')openWalkingFactory();else if(location.hash==='#staffing-study')openRolesFactory();else if(location.hash==='#quality-factory')openQualityFactory();else if(location.hash==='#worker-factory')openWorkerFactory();});

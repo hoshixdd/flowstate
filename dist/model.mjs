@@ -1,5 +1,6 @@
 export const kinds = {source:'Source',processor:'Processor',queue:'Queue',inspection:'Inspection',sink:'Sink'};
 export const templates = {
+  walking:{title:'Packing aisle layout study',category:'Measured walking lab'},
   roles:{title:'Packing crew assignment study',category:'Station assignment lab'},
   quality:{title:'Carton quality line',category:'Factory quality study'},
   lab:{title:'Assembly line',category:'IE classroom lab',names:['Arrivals','Preparation','Assembly','Packaging','Finished units'],times:[30,30,45,36,0]},
@@ -8,6 +9,10 @@ export const templates = {
   campus:{title:'Campus service queue',category:'Campus services',names:['Student arrivals','Check-in','Document review','Release','Students served'],times:[120,60,180,90,0]}
 };
 export function template(key){
+ if(key==='walking'){
+   const model=template('roles');
+   return {...model,...templates.walking,walkingRoutes:[{from:'n1',to:'n2',via:[[307/36,10.5],[578/36,10.5]],metres:22}]};
+ }
  if(key==='roles'){
    const model=template('staffed');
    return {...model,...templates.roles,crew:{...model.crew,roster:[

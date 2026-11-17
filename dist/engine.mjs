@@ -1,6 +1,6 @@
 // Authoritative discrete-event engine for Flowstate.
 // Event priority is: releases/resumes, transfers/completions, then arrivals.
-const VERSION = 'flowstate-des-2.4';
+const VERSION = 'flowstate-des-2.5';
 
 function randomStream(seed) {
   let value = seed >>> 0;
@@ -165,10 +165,33 @@ function validateModel(model) {
       issues.push('Invalid quality route. All products must pass fault sources before the gate. Connect the gate to the separate repair bench and disable other inspection returns.');
     }
   }
+  if(model.walkingRoutes!=null){
+    const seen=new Set();
+    if(!Array.isArray(model.walkingRoutes)||model.walkingRoutes.length>250)issues.push('Invalid walking routes. Use at most 250 station pairs.');
+    else for(const route of model.walkingRoutes){
+      const validEnd=id=>['source','processor','inspection'].includes(nodes.get(id)?.type);
+      if(!route||!validEnd(route.from)||!validEnd(route.to)||route.from===route.to||
+        !Array.isArray(route.via)||route.via.length>32||route.via.some(p=>!Array.isArray(p)||p.length!==2||p.some(v=>!Number.isFinite(v)||Math.abs(v)>10000))||
+        (route.metres!=null&&(!Number.isFinite(route.metres)||route.metres<=0||route.metres>100000))){
+        issues.push('Invalid walking route. Check its stations, bends and measured length.');break;
+      }
+      const pair=[route.from,route.to].sort().join('|');
+      if(seen.has(pair)){issues.push('Invalid walking route. Each station pair may have only one path.');break;}seen.add(pair);
+    }
+  }
   return issues;
 }
+function routeBetween(model,from,to){
+  return model.walkingRoutes?.find(r=>(r.from===from&&r.to===to)||(r.from===to&&r.to===from));
+}
+function pathLength(points){
+  return points.slice(1).reduce((sum,p,i)=>sum+Math.hypot(p[0]-points[i][0],p[1]-points[i][1]),0);
+}
 function workerPath(model,from,to){
+
   const a=[from.x/36,from.y/30+1.16],b=[to.x/36,to.y/30+1.16];
+  const route=routeBetween(model,from.id,to.id);
+  if(route)return [a,...(route.from===from.id?route.via:route.via.slice().reverse()),b];
   const aisle=Math.max(...model.nodes.map(n=>n.y/30))+2.9;
   return from.id===to.id?[a,b]:[a,[a[0],aisle],[b[0],aisle],b];
 }
@@ -304,7 +327,7 @@ function simulateRun(model, settings, record = true) {
   function assign(n,s,job,t,joined,w){
     w.assigned=true;
     const path=workerPath(model,nodes.get(w.station),n);
-    const distance=path.slice(1).reduce((sum,p,i)=>sum+Math.hypot(p[0]-path[i][0],p[1]-path[i][1]),0)*model.crew.scale;
+    const distance=routeBetween(model,w.station,n.id)?.metres??pathLength(path)*model.crew.scale;
     const end=t+distance/model.crew.speed;
     segment(w,'Walking',t,end,w.station,n.id,job,distance);
     reserved.set(n.id,(reserved.get(n.id)||0)+1);
@@ -419,5 +442,5 @@ function sampleSummary(values) {
   const variance = values.reduce((sum, x) => sum + (x - mean) ** 2, 0) / (n - 1);
   return { n, mean, margin: T95[n - 1] * Math.sqrt(variance / n) };
 }
-export { workerPath, simulateRun, normalizeConfig, validateModel, frameAt, sampleSummary, VERSION, mainRouteIds, normalizeProducts };
+export { workerPath, pathLength, routeBetween, simulateRun, normalizeConfig, validateModel, frameAt, sampleSummary, VERSION, mainRouteIds, normalizeProducts };
 

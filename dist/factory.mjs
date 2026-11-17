@@ -1,4 +1,4 @@
-import {workerPath} from './engine.mjs';
+import {workerPath,pathLength} from './engine.mjs';
 import {createDaylightRenderer} from './daylight.mjs';
 // Orthographic industrial cutaway. World coordinates are [east, south, height].
 export function createFactory(canvas, onSelect = () => {}, onWorker = () => {}) {
@@ -439,7 +439,7 @@ export function createFactory(canvas, onSelect = () => {}, onWorker = () => {}) 
       if(!a||!b)return null;
       const path=workerPath(model,a,b),moving=seg.kind==='Walking',working=seg.kind==='Working';
       let x=path[0][0],z=path[0][1],dx=0,dz=-1;
-      let remaining=moving?Math.max(0,clock-seg.start)*model.crew.speed/model.crew.scale:0;
+      let remaining=moving?Math.max(0,Math.min(1,(clock-seg.start)/(seg.end-seg.start)))*pathLength(path):0;
       if(moving)for(let i=1;i<path.length;i++){
         const stepX=path[i][0]-x,stepZ=path[i][1]-z,len=Math.hypot(stepX,stepZ);if(!len)continue;
         dx=stepX/len;dz=stepZ/len;
