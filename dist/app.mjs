@@ -1,3 +1,4 @@
+import {openMaterials} from './materials-lab.mjs';
 import {openWalkingLab} from './walking-lab.mjs';
 import {openStudy} from './study-lab.mjs';
 import {openQualityLab} from './quality-lab.mjs';
@@ -53,7 +54,10 @@ function observerHud(run){
  $('observerTask').textContent=(seg.kind==='Walking'?'To ':'At ')+station+(seg.job?' · unit '+seg.job:'')+' · '+fmt(elapsed)+' s'+(observation?' · recording '+fmt(Math.max(0,cursor-observation.from))+' s':'');
  $('observerProgress').value=Math.min(1,elapsed/Math.max(.001,seg.end-seg.start));
 }
-function paint(){const run=result?.primary;const frame=frameAt(m,run,cursor);if(view==='3d')factory.update(m,frame,selected,$('floorLayer').value,run,cursor,Number($('followWorker').value));observerHud(run);$('scrub').value=cursor;$('clock').textContent=timeLabel(cursor);}
+function paint(){const run=result?.primary;const frame=frameAt(m,run,cursor);
+ $('supplyDeck').hidden=!m.supply;
+ if(m.supply){const s=frame[m.nodes.find(n=>n.type==='source')?.id];$('supplyReadout').textContent=s?.onHand==null?'Run the line to see stock at receiving':s.onHand+' in stock · '+s.materialBacklog+' orders waiting for material';}
+ if(view==='3d')factory.update(m,frame,selected,$('floorLayer').value,run,cursor,Number($('followWorker').value));observerHud(run);$('scrub').value=cursor;$('clock').textContent=timeLabel(cursor);}
 function play(){
  if(!result)return; if(playing){stopPlaying();return;}if(cursor>=project.config.horizon)cursor=0;
  playing=true;$('play').textContent='Ⅱ';let then=performance.now();lastPaint=0;
@@ -150,6 +154,7 @@ function analytics(){
  const productRows=(r.productMetrics??[]).map(p=>'<tr><td><span class="swatch" style="background:'+escape(p.color)+'"></span>'+escape(p.name)+'</td><td>'+fmt(p.arrivals)+'</td><td>'+fmt(p.completed)+'</td><td>'+fmt(p.rejected)+'</td><td>'+fmt(p.reworked)+'</td><td>'+escape(productRouteLabel(p.route))+'</td></tr>').join('');
  const events=(r.eventLog??[]).slice(0,24).map(e=>'<tr><td>'+timeLabel(e.time)+'</td><td>'+escape(e.type)+'</td><td>'+escape(m.nodes.find(n=>n.id===e.stationId)?.name??'—')+'</td><td>'+escape(r.productMetrics?.find(p=>p.id===e.productId)?.name??'—')+'</td><td>'+escape(String(e.jobId??'—'))+'</td></tr>').join('');
  $('details').innerHTML='<h3>Station performance</h3><p>'+fmt(r.arrivals)+' arrivals · '+fmt(r.rejected)+' rejected · ₱'+fmt(r.cost,2)+' configured operating cost · '+result.throughput.n+' replication(s), mean '+fmt(result.throughput.mean)+' units/h'+(result.throughput.margin==null?'':' (95% CI ±'+fmt(result.throughput.margin)+')')+'</p><table><thead><tr><th>Station</th><th>Utilization</th><th>Mean queue</th><th>Peak queue</th><th>Mean wait¹</th><th>Rejected</th></tr></thead><tbody>'+rows+'</tbody></table><p>¹ Waiting time for units starting service in the observation window. Queue length is time-weighted. Utilization excludes planned stops.</p>'+(productRows?'<h3>Product flows</h3><table><thead><tr><th>Product</th><th>Arrivals</th><th>Completed</th><th>Rejected</th><th>Rework</th><th>Route</th></tr></thead><tbody>'+productRows+'</tbody></table>':'')+'<details class="eventlog"><summary>Recorded event playback · '+fmt(r.events,0)+' events</summary><p class="muted">The 3D floor replays station state from this discrete-event log. Showing the first 24 records.</p><table><thead><tr><th>Time</th><th>Event</th><th>Station</th><th>Product</th><th>Job</th></tr></thead><tbody>'+events+'</tbody></table></details>';
+ if(r.inventory){const v=r.inventory;$('details').insertAdjacentHTML('afterbegin','<h3>Material availability</h3><p>'+escape(v.name)+' · '+fmt(v.shortageSeconds/60)+' minutes with orders awaiting material · '+v.waiting+' orders still awaiting release · '+v.onHand+' units of material left.</p>');}
  if(b){const q=m.nodes.find(n=>n.type==='queue'&&m.edges.some(([a,d])=>a===n.id&&d===b.id));const track=r.tracks[q?.id??b.id]??[],max=Math.max(1,b.peak);
  let points='0,49',prev=0;const from=r.config.warmup,end=r.config.horizon,step=Math.max(1,Math.ceil(track.length/700));for(let i=0;i<track.length;i+=step){const s=track[i];if(s.time<from){prev=s.waiting;continue;}const x=(s.time-from)/(end-from)*600;points+=' '+x+','+(49-45*Math.min(1,prev/max))+' '+x+','+(49-45*Math.min(1,s.waiting/max));prev=s.waiting;}points+=' 600,'+(49-45*Math.min(1,prev/max));
  $('details').insertAdjacentHTML('beforeend','<div class="chartbox"><div class="trendlabel"><b>'+escape(b.name)+' · waiting units</b><span>Peak '+b.peak+'</span></div><svg class="trend" viewBox="0 0 600 52" preserveAspectRatio="none" role="img" aria-label="Queue history at '+escape(b.name)+'"><polyline points="'+points+'" fill="none" stroke="#3b765c" stroke-width="2" vector-effect="non-scaling-stroke"/></svg><div class="trendlabel"><span>'+timeLabel(from)+'</span><span>'+timeLabel(end)+'</span></div></div>');}}
@@ -175,7 +180,7 @@ function slug(name){return name.replace(/[^a-z0-9_-]+/gi,'-').slice(0,60)||'flow
 function validImport(m){
  if(!m||typeof m.title!=='string'||m.title.length>120||typeof m.category!=='string'||m.category.length>120||!Array.isArray(m.nodes)||m.nodes.length>100||!Array.isArray(m.edges)||m.edges.length>200)throw Error('Invalid project format.');
  if(!m.nodes.every(n=>n&&Object.hasOwn(kinds,n.type)&&typeof n.id==='string'&&/^[\w-]{1,80}$/.test(n.id)&&!['__proto__','constructor','prototype'].includes(n.id)&&typeof n.name==='string'&&n.name.length<=80&&Number.isFinite(n.x)&&Number.isFinite(n.y)&&Math.abs(n.x)<100001&&Math.abs(n.y)<100001&&Number.isFinite(n.seconds))||!m.edges.every(e=>Array.isArray(e)&&e.length===2&&e.every(v=>m.nodes.some(n=>n.id===v))))throw Error('Invalid station or connection.');
- const issues=validateModel(m);if(issues.some(s=>/Invalid walking route|Invalid worker roster|Invalid quality|workers, walking speed|invalid ID|unknown distribution|1-64|invalid waiting|invalid hourly|valid positive|invalid rework/.test(s)))throw Error(issues.join(' '));
+ const issues=validateModel(m);if(issues.some(s=>/Invalid material supply|Invalid walking route|Invalid worker roster|Invalid quality|workers, walking speed|invalid ID|unknown distribution|1-64|invalid waiting|invalid hourly|valid positive|invalid rework/.test(s)))throw Error(issues.join(' '));
  return clone(m);
 }
 function activate(p){clearRun();project=p;db.active=p.id;m=p.model;selected=m.nodes.find(n=>n.type==='processor')?.id??m.nodes[0]?.id;past=[];future=[];save();$('dialog').close();render();factory.reset();runModel(true);}
@@ -212,6 +217,7 @@ function projectManager(archived=false){
  function capture(name){const r=result.primary;return {id:uuid(),name,model:clone(m),config:{...project.config},revision:project.revision,at:new Date().toISOString(),engine:VERSION,units:result.units.slice(),rate:result.throughput.mean,flow:r.averageFlow,cost:r.cost,events:r.events,productMetrics:clone(r.productMetrics??[])};}
 function differences(a,b){
  const changes=[];for(const k of ['horizon','warmup','seed','reps'])if(a.config[k]!==b.config[k])changes.push(k+' changed from '+a.config[k]+' to '+b.config[k]);
+ if(JSON.stringify(a.model.supply??null)!==JSON.stringify(b.model.supply??null))changes.push('Material or lot delivery schedule changed.');
  if(JSON.stringify(a.model.walkingRoutes??[])!==JSON.stringify(b.model.walkingRoutes??[]))changes.push('Measured walking routes changed.');
  if(JSON.stringify(a.model.crew??null)!==JSON.stringify(b.model.crew??null))changes.push('Worker staffing or station assignments changed.');
  for(const n of b.model.nodes){const old=a.model.nodes.find(s=>s.id===n.id);if(!old){changes.push('Added '+n.name);continue;}
@@ -271,6 +277,21 @@ function openQualityFactory(){
  if(p)activate(p);else addProject(template('quality'));
  $('speed').value='1';setView('3d');
 }
+function openMaterialsFactory(){
+ const p=db.projects.find(p=>!p.archived&&p.model.category===templates.materials.category);
+ if(p)activate(p);else addProject(template('materials'));
+ $('speed').value='10';setView('3d');
+}
+function materialsPanel(){
+ stopPlaying();
+ openMaterials({model:m,run:result?.primary,config:project.config,modal,escape,download,example:openMaterialsFactory,replay:replayFault,
+   baseline:project.supplyBaseline?.revision===project.revision?project.supplyBaseline:null,
+   apply:(supply,baseline)=>{
+     commit(()=>{m.supply=supply;project.supplyBaseline=baseline?{...baseline,revision:project.revision+1}:null;});
+     $('dialog').close();runModel(true);
+   }});
+}
+$('materials').onclick=materialsPanel;$('reviewMaterials').onclick=materialsPanel;
 function openWalkingFactory(){
  const p=db.projects.find(p=>!p.archived&&p.model.category===templates.walking.category);
  if(p)activate(p);else addProject(template('walking'));
@@ -293,7 +314,7 @@ function replayFault(event){
  stopPlaying();observation=null;$('dialog').close();cursor=event.time;selected=event.stationId;
  $('followWorker').value='0';setView('3d');render();factory.focus();paint();
  const name=m.nodes.find(n=>n.id===selected)?.name??selected;
- $('qualityStatus').textContent='Carton '+event.jobId+' · '+name+' · '+event.kind+' · '+timeLabel(cursor);
+ if(event.jobId!=null)$('qualityStatus').textContent='Carton '+event.jobId+' · '+name+' · '+event.kind+' · '+timeLabel(cursor);
  $('stage').scrollIntoView({block:'center'});
 }
 function qualityPanel(){
@@ -396,5 +417,9 @@ $('nextActivity').onclick=()=>{
  setView('3d');paint();
 };
 if(!warning)save();render();
-if(location.hash==='#walking-study')openWalkingFactory();else if(location.hash==='#staffing-study')openRolesFactory();else if(location.hash==='#quality-factory')openQualityFactory();else if(location.hash==='#worker-factory')openWorkerFactory();else runModel(true);
-window.addEventListener('hashchange',()=>{if(location.hash==='#walking-study')openWalkingFactory();else if(location.hash==='#staffing-study')openRolesFactory();else if(location.hash==='#quality-factory')openQualityFactory();else if(location.hash==='#worker-factory')openWorkerFactory();});
+function openStudyRoute(){
+ const routes={'#materials-study':openMaterialsFactory,'#walking-study':openWalkingFactory,'#staffing-study':openRolesFactory,'#quality-factory':openQualityFactory,'#worker-factory':openWorkerFactory};
+ const open=routes[location.hash];if(!open)return false;open();return true;
+}
+if(!openStudyRoute())runModel(true);
+window.addEventListener('hashchange',openStudyRoute);

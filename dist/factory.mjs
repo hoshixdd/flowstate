@@ -219,8 +219,13 @@ export function createFactory(canvas, onSelect = () => {}, onWorker = () => {}) 
         // Fork-entry pallet, incoming cases and a short gravity roller table.
         for(const a of [-1.20,-.72,-.24])s(a,.02,.13,.14,1.56,.16,cardboard);
         for(let i=0;i<5;i++)s(-.72,-.65+i*.34,.29,1.26,.23,.09,'#cdab81');
-        for(const a of [-1.03,-.40])for(const d of [-.36,.28])crate(x+a,z+d,.38,.57,id);
-        crate(x-.75,z-.08,.80,.54,id);
+        if(state.onHand!=null){
+          const stacks=Math.min(12,Math.ceil(state.onHand/5));
+          for(let i=0;i<stacks;i++)s(-1.03+(i%2)*.62,-.35+(Math.floor(i/2)%2)*.64,.38+Math.floor(i/4)*.18,.55,.58,.16,cardboard);
+        }else{
+          for(const a of [-1.03,-.40])for(const d of [-.36,.28])crate(x+a,z+d,.38,.57,id);
+          crate(x-.75,z-.08,.80,.54,id);
+        }
         for(const d of [-.58,.58])s(.70,d,.13,1.28,.13,.59,navy);
         for(let i=0;i<6;i++)line([.16+i*.21,-.55,.72],[.16+i*.21,.55,.72],.066,metal);
         consoleAt(1.12,-.72,.78);

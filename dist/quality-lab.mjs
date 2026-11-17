@@ -21,7 +21,8 @@ export function openQualityLab(ctx){
    if(!units.length)return;
    function trace(){
      const rows=run.qualityTrace.filter(e=>e.jobId===+$('qUnit').value);
-     $('qTrace').innerHTML=rows.map((e,i)=>'<div class="listitem"><div><strong>'+eventNames[e.kind]+' · '+station(e.stationId)+'</strong><small>'+escape(names(e.mode))+'</small></div><button data-jump="'+i+'">Replay '+clock(e.time)+'</button></div>').join('');
+     const order=run.inventory?.orders[+$('qUnit').value-1];
+     $('qTrace').innerHTML=(order?.lot?'<p>Supplier lot <strong>'+escape(order.lot)+'</strong> · issued at '+clock(order.issued)+'</p>':'')+rows.map((e,i)=>'<div class="listitem"><div><strong>'+eventNames[e.kind]+' · '+station(e.stationId)+'</strong><small>'+escape(names(e.mode))+'</small></div><button data-jump="'+i+'">Replay '+clock(e.time)+'</button></div>').join('');
      document.querySelectorAll('[data-jump]').forEach(b=>b.onclick=()=>seek(rows[+b.dataset.jump]));
    }
    $('qUnit').onchange=trace;trace();

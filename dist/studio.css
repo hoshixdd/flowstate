@@ -64,3 +64,5 @@ body.floor-expanded{overflow:hidden}.floor-expanded .modelpane{position:fixed;in
 .roster input[type=checkbox]{width:18px;height:18px;margin:auto;accent-color:#16736b}.roster th input[type=text],.roster th input:not([type]){min-width:120px}.roster td{text-align:center}.roster th{white-space:normal}.roster label{margin:0}#dialog:has(#crewForm){width:min(790px,94vw)}#rosterCoverage{font-size:12px}
 
 #dialog:has(#walkForm){width:min(740px,94vw)}#walkMap{display:block;width:100%;height:auto;background:#edf4f5;border:1px solid #c4d6dc;border-radius:8px;cursor:crosshair}#walkMap text{font:600 12px system-ui;fill:#29444b;paint-order:stroke;stroke:#edf4f5;stroke-width:3px}#walkForm details{margin:12px 0}#walkForm summary{cursor:pointer;margin-bottom:8px}#walkError{color:#904029}
+
+#dialog:has(#matForm),#dialog:has(#matGenealogy){width:min(810px,94vw)}#matTable input{min-width:85px}#matGenealogy{margin:12px 0}#matError{color:#924324}#supplyDeck{background:#214645}#supplyDeck small{color:#bce6cc}

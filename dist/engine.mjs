@@ -1,6 +1,6 @@
 // Authoritative discrete-event engine for Flowstate.
 // Event priority is: releases/resumes, transfers/completions, then arrivals.
-const VERSION = 'flowstate-des-2.5';
+const VERSION = 'flowstate-des-2.6';
 
 function randomStream(seed) {
   let value = seed >>> 0;
@@ -179,6 +179,13 @@ function validateModel(model) {
       if(seen.has(pair)){issues.push('Invalid walking route. Each station pair may have only one path.');break;}seen.add(pair);
     }
   }
+  if(model.supply!=null){
+    const s=model.supply;
+    if(typeof s.name!=='string'||!s.name.trim()||s.name.length>80||!Array.isArray(s.lots)||s.lots.length>200||
+       s.lots.some(l=>!l||typeof l.id!=='string'||!l.id.trim()||l.id.length>64||!Number.isInteger(l.quantity)||l.quantity<1||l.quantity>1000000||
+         !Number.isFinite(l.at)||l.at<0||l.at>604800)||new Set(s.lots.map(l=>l.id.trim())).size!==s.lots.length)
+      issues.push('Invalid material supply. Enter unique lot IDs, positive whole quantities and receipt times within seven days.');
+  }
   return issues;
 }
 function routeBetween(model,from,to){
@@ -239,7 +246,7 @@ function simulateRun(model, settings, record = true) {
       const recovered=occurs(job,'repair-recovery',q.recovery);
       if(observed)quality[recovered?'repaired':'scrapped']++;
       qualityEvent(recovered?'repair':'scrap',t,n.id,job,job.faults.join(','));
-      if(!recovered){totalScrap++;return false;}
+      if(!recovered){totalScrap++;disposition(job,'scrapped','Scrapped',t);return false;}
       job.faults=[];
     }
     return true;
@@ -249,7 +256,34 @@ function simulateRun(model, settings, record = true) {
   const tracks = Object.fromEntries(model.nodes.map(n => [n.id, []])), heap = new EventHeap(), eventLog = [], EVENT_LOG_LIMIT = 50000;
   let jobs = 0, finished = 0, arrived = 0, observedFinished = 0, totalFlow = 0, rejected = 0, observedRejected = 0, reworked = 0, eventCount = 0;
   const productStats = new Map(products.map(p => [p.id, { id: p.id, name: p.name, color: p.color, arrivals: 0, completed: 0, rejected: 0, reworked: 0, route: p.route.slice() }]));
-  const logEvent = (type, time, stationId, job, extra = {}) => { if (record && eventLog.length < EVENT_LOG_LIMIT) eventLog.push({ type, time, stationId: stationId ?? null, jobId: job?.id ?? null, productId: job?.productId ?? null, ...extra }); };
+  const logEvent = (type, time, stationId, job, extra = {}) => { if (record && eventLog.length < EVENT_LOG_LIMIT) eventLog.push({ type, time, stationId: stationId ?? null, jobId: job?.id ?? null, productId: job?.productId ?? null, ...(job?.lot?{lot:job.lot.id}:{}), ...extra }); };
+  // Orders wait at receiving until one material unit is issued. Ties use delivery row order.
+  const lots=(model.supply?.lots??[]).map(l=>({...l,received:0,used:0,good:0,escaped:0,scrapped:0,rejected:0})).sort((a,b)=>a.at-b.at);
+  const inventory=model.supply?{name:model.supply.name,lots,onHand:0,waiting:0,peakWaiting:0,shortageSeconds:0,
+    orderWaitSeconds:0,trace:[],orders:[]}:null;
+  const pending=[];let pendingHead=0,lotHead=0,lastMaterialTime=0;
+  function accrueMaterial(t){
+    const dt=Math.max(0,t-Math.max(warmup,lastMaterialTime));
+    if(inventory.waiting){inventory.shortageSeconds+=dt;inventory.orderWaitSeconds+=dt*inventory.waiting;}
+    lastMaterialTime=t;
+  }
+  function materialFrame(t){
+    inventory.peakWaiting=Math.max(inventory.peakWaiting,t>=warmup?inventory.waiting:0);
+    if(!record)return;
+    const frames=inventory.trace,row={time:t,onHand:inventory.onHand,waiting:inventory.waiting};
+    if(frames.length&&frames[frames.length-1].time===t)frames[frames.length-1]=row;else frames.push(row);
+  }
+  function issue(job,t){
+    while(lotHead<lots.length&&lots[lotHead].used===lots[lotHead].quantity)lotHead++;
+    const lot=lots[lotHead];lot.used++;inventory.onHand--;job.lot=lot;
+    if(record)Object.assign(inventory.orders[job.id-1],{lot:lot.id,issued:t,status:'In production'});
+    logEvent('material-issued',t,source.id,job,{lot:lot.id});visit(job,t);
+  }
+  function disposition(job,key,label,t){
+    if(!job.lot)return;
+    job.lot[key]++;
+    if(record)Object.assign(inventory.orders[job.id-1],{status:label,ended:t});
+  }
   const trace = (id, time, busy, waiting, completed, active) => {
     if (!record) return;
     const row = { time, busy, waiting, completed, start: active?.start ?? time, end: active?.end ?? time, productId: active?.productId ?? null };
@@ -294,6 +328,7 @@ function simulateRun(model, settings, record = true) {
         if(t>=warmup)quality[job.faults?.length?'escaped':'goodShipped']++;
         if(job.faults?.length)qualityEvent('escape',t,id,job,job.faults.join(','));
       }
+      disposition(job,job.faults?.length?'escaped':'good',job.faults?.length?'Shipped faulty':'Shipped good',t);
       finished++; const ps = productStats.get(job.productId); ps.completed++;
       if (t >= warmup) { observedFinished++; totalFlow += t - job.entered; }
       logEvent('departure', t, id, job); trace(id, t, 0, 0, finished); return;
@@ -307,6 +342,7 @@ function simulateRun(model, settings, record = true) {
     else {
       const limit = explicit ? explicit.limit : n.limit;
       if (limit != null && s.queue.length - s.head >= limit) {
+        disposition(job,'rejected','Buffer rejection',t);
         rejected++; productStats.get(job.productId).rejected++;
         if (t >= warmup) { s.drops++; observedRejected++; }
         logEvent('rejected', t, id, job, { limit });
@@ -349,6 +385,7 @@ function simulateRun(model, settings, record = true) {
     }
   }
   const scheduleArrival = (product, time) => heap.push({ time, rank: 2, type: 'arrival', productId: product.id });
+  for (const lot of lots)heap.push({time:lot.at,rank:-2,type:'receipt',lot});
   for (const product of products) scheduleArrival(product, 0);
   for (const n of stations) if (n.pauseLength > 0) heap.push({ time: n.pauseStart + n.pauseLength, rank: 0, type: 'resume', id: n.id });
   if (warmup > 0) heap.push({ time: warmup, rank: -1, type: 'warmup' });
@@ -356,6 +393,14 @@ function simulateRun(model, settings, record = true) {
     const e = heap.pop(), t = e.time;
     if (t > horizon) break;
     if (++eventCount > 150000) throw Error('This run exceeds 150,000 events. Shorten the run or increase arrival intervals.');
+    if(e.type==='receipt'){
+      accrueMaterial(t);e.lot.received=e.lot.quantity;inventory.onHand+=e.lot.quantity;
+      logEvent('lot-received',t,source.id,null,{lot:e.lot.id,quantity:e.lot.quantity});
+      while(inventory.onHand>0&&inventory.waiting>0){inventory.waiting--;issue(pending[pendingHead++],t);}
+      if(pendingHead===pending.length){pending.length=0;pendingHead=0;}
+      materialFrame(t);continue;
+    }
+    if (e.type === 'warmup'&&inventory){accrueMaterial(t);inventory.peakWaiting=inventory.waiting;}
     if (e.type === 'warmup') { for (const s of stats.values()) s.peak = s.queue.length - s.head; continue; }
     if(e.type==='at-station'){
       const n=nodes.get(e.id),s=stats.get(e.id);e.w.station=n.id;
@@ -379,7 +424,12 @@ function simulateRun(model, settings, record = true) {
       productStats.get(product.id).arrivals++;
       logEvent('arrival', t, source.id, job);
       trace(source.id, t, 0, 0, jobs);
-      visit(job, t);
+      if(inventory){
+        accrueMaterial(t);
+        if(record)inventory.orders.push({id:job.id,product:job.productId,ordered:t,lot:null,issued:null,ended:null,status:'Awaiting material'});
+        if(inventory.onHand>0)issue(job,t);else{pending.push(job);inventory.waiting++;}
+        materialFrame(t);
+      }else visit(job,t);
       const random = arrivalRng.find(([id]) => id === product.id)[1], later = t + sample(product.interval, product.distribution, random);
       if (later < horizon) scheduleArrival(product, later);
     } else if (e.type === 'transfer') visit(e.job, t);
@@ -402,6 +452,7 @@ function simulateRun(model, settings, record = true) {
     }
     if(crew.length)dispatch(t);
   }
+  if(inventory)accrueMaterial(horizon);
   const workers=record?crew.map(w=>{
     const intervals=[];let last=0,location=source.id;
     for(const seg of w.segments){
@@ -419,7 +470,7 @@ function simulateRun(model, settings, record = true) {
   });
   const cost = stations.reduce((a, n) => a + (n.hourly ?? 0) * (n.servers ?? 1) * window / 3600, 0);
   const bottleneck = rows.slice().sort((a, b) => b.avgQueue - a.avgQueue || b.util - a.util)[0];
-  return { version: VERSION, config, tracks, rows, workers, quality, qualityTrace, totalScrap, arrivals: arrived, completed: observedFinished, totalCompleted: finished, totalArrivals: jobs, throughput: observedFinished / window * 3600, averageFlow: observedFinished ? totalFlow / observedFinished : null, rejected: observedRejected, wip: jobs - finished - rejected - totalScrap, reworked, cost, unitCost: observedFinished ? cost / observedFinished : null, bottleneck: bottleneck?.id ?? null, events: eventLog.length, processedEvents: eventCount, eventLog, eventLogTruncated: eventLog.length >= EVENT_LOG_LIMIT, productMetrics: [...productStats.values()] };
+  return { version: VERSION, config, tracks, rows, workers, inventory, quality, qualityTrace, totalScrap, arrivals: arrived, completed: observedFinished, totalCompleted: finished, totalArrivals: jobs, throughput: observedFinished / window * 3600, averageFlow: observedFinished ? totalFlow / observedFinished : null, rejected: observedRejected, wip: jobs - finished - rejected - totalScrap - (inventory?.waiting??0), reworked, cost, unitCost: observedFinished ? cost / observedFinished : null, bottleneck: bottleneck?.id ?? null, events: eventLog.length, processedEvents: eventCount, eventLog, eventLogTruncated: eventLog.length >= EVENT_LOG_LIMIT, productMetrics: [...productStats.values()] };
 }
 function frameAt(model, run, time) {
   const frame = {};
@@ -432,6 +483,12 @@ function frameAt(model, run, time) {
     const duration = row ? row.end - row.start - off(row.start, row.end) : 0;
     const progress = duration > 0 ? (time - row.start - off(row.start, time)) / duration : 0;
     frame[n.id] = { busy: paused ? 0 : row?.busy ?? 0, waiting: row?.waiting ?? 0, completed: row?.completed ?? 0, capacity: n.servers ?? 1, paused, progress: Math.min(1, Math.max(0, progress)) };
+  }
+  if(run?.inventory){
+    const rows=run.inventory.trace;let lo=0,hi=rows.length;
+    while(lo<hi){const mid=(lo+hi)>>1;if(rows[mid].time<=time)lo=mid+1;else hi=mid;}
+    const state=frame[model.nodes.find(n=>n.type==='source').id];
+    state.onHand=rows[lo-1]?.onHand??0;state.materialBacklog=rows[lo-1]?.waiting??0;
   }
   return frame;
 }

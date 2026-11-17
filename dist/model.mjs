@@ -1,5 +1,6 @@
 export const kinds = {source:'Source',processor:'Processor',queue:'Queue',inspection:'Inspection',sink:'Sink'};
 export const templates = {
+  materials:{title:'Carton supply and lot study',category:'Material flow lab'},
   walking:{title:'Packing aisle layout study',category:'Measured walking lab'},
   roles:{title:'Packing crew assignment study',category:'Station assignment lab'},
   quality:{title:'Carton quality line',category:'Factory quality study'},
@@ -9,6 +10,12 @@ export const templates = {
   campus:{title:'Campus service queue',category:'Campus services',names:['Student arrivals','Check-in','Document review','Release','Students served'],times:[120,60,180,90,0]}
 };
 export function template(key){
+ if(key==='materials'){
+   const model=template('quality');
+   return {...model,...templates.materials,supply:{name:'Carton blank',lots:[
+     {id:'BLANK-A',at:0,quantity:30},{id:'BLANK-B',at:1800,quantity:150}
+   ]}};
+ }
  if(key==='walking'){
    const model=template('roles');
    return {...model,...templates.walking,walkingRoutes:[{from:'n1',to:'n2',via:[[307/36,10.5],[578/36,10.5]],metres:22}]};
