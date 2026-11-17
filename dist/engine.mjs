@@ -1,6 +1,6 @@
 // Authoritative discrete-event engine for Flowstate.
 // Event priority is: releases/resumes, transfers/completions, then arrivals.
-const VERSION = 'flowstate-des-2.6';
+const VERSION = 'flowstate-des-2.7';
 
 function randomStream(seed) {
   let value = seed >>> 0;
@@ -86,6 +86,9 @@ function validateModel(model) {
   if(model.crew && (!Number.isInteger(model.crew.count)||model.crew.count<1||model.crew.count>16||!Number.isFinite(model.crew.speed)||model.crew.speed<.1||model.crew.speed>4||!Number.isFinite(model.crew.scale)||model.crew.scale<=0||model.crew.scale>100))issues.push('Choose 1–16 workers, walking speed 0.1–4 m/s and a valid floor scale.');
   for (const n of model.nodes) {
     if (!n || typeof n.id !== 'string' || !/^[\w-]{1,80}$/.test(n.id) || nodes.has(n.id) || ['__proto__', 'constructor', 'prototype'].includes(n.id) || !Object.hasOwn({ source: 1, sink: 1, processor: 1, inspection: 1, queue: 1 }, n.type) || typeof n.name !== 'string' || !n.name.trim() || n.name.length > 80 || !Number.isFinite(n.x) || !Number.isFinite(n.y) || Math.abs(n.x) > 100000 || Math.abs(n.y) > 100000) return ['A station has an invalid ID, name, type or position.'];
+    if(n.reliability && (!['processor','inspection'].includes(n.type)||['life','repair','pmAge','pmTime'].some(k=>!Number.isFinite(n.reliability[k])||n.reliability[k]<0||n.reliability[k]>604800)||n.reliability.life<1||n.reliability.repair<1||(n.reliability.pmAge>0&&(n.reliability.pmAge<1||n.reliability.pmTime<1))))issues.push('Invalid station reliability settings.');
+    if(n.unattended!=null&&typeof n.unattended!=='boolean')issues.push('Invalid station staffing mode.');
+    if(n.setting!=null&&!Number.isFinite(n.setting))issues.push('Invalid station setting.');
     nodes.set(n.id, n); outgoing.set(n.id, []); incoming.set(n.id, []);
     if (n.type === 'source') sources.push(n);
     if (n.type === 'sink') sinks.push(n);
@@ -165,6 +168,12 @@ function validateModel(model) {
       issues.push('Invalid quality route. All products must pass fault sources before the gate. Connect the gate to the separate repair bench and disable other inspection returns.');
     }
   }
+  for(const mode of Array.isArray(model.quality?.modes)?model.quality.modes:[]){
+    const c=mode?.condition;
+    if(c&&(!['high','low','wait','restart','lot'].includes(c.type)||!Number.isFinite(c.threshold)||!Number.isFinite(c.rate)||c.rate<0||c.rate>100||
+      (['high','low'].includes(c.type)&&!Number.isFinite(nodes.get(mode.station)?.setting))||
+      (['wait','restart','lot'].includes(c.type)&&c.threshold<0)||(c.type==='lot'&&(!Number.isInteger(c.threshold)||!model.supply))))issues.push('Invalid operating condition. Check the trigger, station setting and exposed defect rate.');
+  }
   if(model.walkingRoutes!=null){
     const seen=new Set();
     if(!Array.isArray(model.walkingRoutes)||model.walkingRoutes.length>250)issues.push('Invalid walking routes. Use at most 250 station pairs.');
@@ -202,6 +211,44 @@ function workerPath(model,from,to){
   const aisle=Math.max(...model.nodes.map(n=>n.y/30))+2.9;
   return from.id===to.id?[a,b]:[a,[a[0],aisle],[b[0],aisle],b];
 }
+// Station-wide availability uses elapsed online time, including idle time. Both service and replay use this same calendar.
+function stationStops(n,seed,horizon){
+  const raw=[],r=n.reliability;
+  if(n.pauseLength>0)raw.push({start:n.pauseStart,end:n.pauseStart+n.pauseLength,reason:'Planned stop'});
+  if(r){
+    const random=randomStream((seed^hashText('availability:'+n.id))>>>0);
+    let t=0;
+    while(t<horizon){
+      const failureAge=r.life*Math.sqrt(-Math.log1p(-random()));
+      const preventive=r.pmAge>0&&r.pmAge<failureAge;
+      const onlineAge=Math.max(.000001,preventive?r.pmAge:failureAge);
+      let start=t+onlineAge;
+      if(n.pauseLength>0 && t<n.pauseStart+n.pauseLength && start>=n.pauseStart){
+        start+=n.pauseStart+n.pauseLength-Math.max(t,n.pauseStart);
+      }
+      if(start>=horizon)break;
+      t=start+(preventive?r.pmTime:r.repair);
+      raw.push({start,end:t,reason:preventive?'Preventive maintenance':'Breakdown repair'});
+      if(raw.length>10000)throw Error('Too many stops at '+n.name+'. Shorten the run or increase the reliability times.');
+    }
+  }
+  const stops=[];
+  for(const x of raw.sort((a,b)=>a.start-b.start)){
+    const prev=stops.at(-1);
+    if(prev&&x.start<=prev.end){prev.end=Math.max(prev.end,x.end);if(!prev.reason.includes(x.reason))prev.reason+=' + '+x.reason;}
+    else stops.push({...x,before:prev?prev.before+prev.end-prev.start:0});
+  }
+  return stops;
+}
+function stopIndex(stops,t){
+  let lo=0,hi=stops.length;
+  while(lo<hi){const mid=(lo+hi)>>1;if(stops[mid].end<=t)lo=mid+1;else hi=mid;}
+  return lo;
+}
+function stoppedTime(stops,t){
+  const i=stopIndex(stops,t),current=stops[i],last=stops[i-1];
+  return current?current.before+Math.max(0,t-current.start):last?last.before+last.end-last.start:0;
+}
 function simulateRun(model, settings, record = true) {
   const config = normalizeConfig(settings), issues = validateModel(model);
   if (issues.length) throw Error(issues.join(' '));
@@ -213,21 +260,26 @@ function simulateRun(model, settings, record = true) {
   const arrivalRng = products.map((p, i) => [p.id, products.length === 1 ? rng.get(source.id) : randomStream((seed ^ hashText(p.id) ^ Math.imul(i + 1, 2246822519)) >>> 0)]);
   const queueBefore = new Map();
   const q = model.quality;
+  const calendars=Object.fromEntries(stations.map(n=>[n.id,stationStops(n,seed,horizon)]));
+  const lotUse=new Map();
   const quality = q ? {inspected:0, firstGood:0, detected:0, repaired:0, scrapped:0, escaped:0, goodShipped:0,
-    counts:q.modes.map(m=>({id:m.id,name:m.name,station:m.station,faults:0,opportunities:0}))} : null;
+    counts:q.modes.map(m=>({id:m.id,name:m.name,station:m.station,faults:0,opportunities:0,exposed:0,exposedFaults:0}))} : null;
   const qualityTrace=[];
   let totalScrap=0;
   // Key each quality draw to its carton so prevention trials retain matched exposure.
   const occurs=(job,key,rate)=>randomStream((seed ^ hashText(job.id+'|'+key))>>>0)()*100 < rate;
   function qualityEvent(kind,t,stationId,job,mode){
-    if(record)qualityTrace.push({kind,time:t,stationId,jobId:job.id,mode});
+    if(record)qualityTrace.push({kind,time:t,stationId,jobId:job.id,mode,...(kind==='fault'?{exposed:!!job.exposures?.includes(mode)}:{})});
   }
   function finishQualityStep(n,job,t){
     const observed=t>=warmup;
     for(const [i,mode] of q.modes.entries()){
       if(mode.station!==n.id)continue;
       if(observed)quality.counts[i].opportunities++;
-      if(occurs(job,mode.id,mode.rate)){
+      const exposed=!!job.exposures?.includes(mode.id);
+      if(observed&&exposed)quality.counts[i].exposed++;
+      if(occurs(job,mode.id,exposed?mode.condition.rate:mode.rate)){
+        if(observed&&exposed)quality.counts[i].exposedFaults++;
         (job.faults??=[]).push(mode.id);
         if(observed)quality.counts[i].faults++;
         qualityEvent('fault',t,n.id,job,mode.id);
@@ -290,8 +342,9 @@ function simulateRun(model, settings, record = true) {
     const track = tracks[id];
     if (track.length && track[track.length - 1].time === time) track[track.length - 1] = row; else track.push(row);
   };
-  function offTime(n, from, to) { return n.pauseLength ? Math.max(0, Math.min(to, n.pauseStart + n.pauseLength) - Math.max(from, n.pauseStart)) : 0; }
-  function isPaused(n, t) { return n.pauseLength > 0 && t >= n.pauseStart && t < n.pauseStart + n.pauseLength; }
+  function offTime(n,from,to){const stops=calendars[n.id];return to>from?stoppedTime(stops,to)-stoppedTime(stops,from):0;}
+  function activeStop(n,t){const stops=calendars[n.id],s=stops[stopIndex(stops,t)];return s&&s.start<=t?s:null;}
+  function isPaused(n,t){return !!activeStop(n,t);}
   function integral(s, t) {
     const dt = Math.max(0, Math.min(t, horizon) - Math.max(s.last, warmup));
     const n = nodes.get(s.id), lost = offTime(n, Math.max(s.last, warmup), Math.min(t, horizon));
@@ -305,18 +358,29 @@ function simulateRun(model, settings, record = true) {
   }
   function start(n, s, job, t, joined, w=null) {
     let end = t + sample(n.seconds, n.distribution, rng.get(n.id));
-    if (n.pauseLength > 0 && t < n.pauseStart && end > n.pauseStart) end += n.pauseLength;
+    const stops=calendars[n.id],first=stopIndex(stops,t);
+    let cursor=t;
+    for(let i=first;i<stops.length&&stops[i].start<end;i++){
+      const stop=stops[i];
+      if(w){segment(w,'Working',cursor,stop.start,n.id,n.id,job);segment(w,'Waiting',stop.start,stop.end,n.id,n.id,job);}
+      end+=stop.end-stop.start;cursor=stop.end;
+    }
+    if(w)segment(w,'Working',cursor,end,n.id,n.id,job);
+    if(q){
+      job.exposures=[];
+      let ordinal=0;
+      if(job.lot){const key=JSON.stringify([n.id,job.lot.id]);ordinal=(lotUse.get(key)??0)+1;lotUse.set(key,ordinal);}
+      for(const mode of q.modes){
+        const c=mode.condition;if(mode.station!==n.id||!c)continue;
+        const previous=stops[first-1];
+        const exposed=c.type==='high'?n.setting>c.threshold:c.type==='low'?n.setting<c.threshold:
+          c.type==='wait'?t-joined>c.threshold:c.type==='restart'?previous&&t-previous.end<c.threshold:ordinal>0&&ordinal<=c.threshold;
+        if(exposed)job.exposures.push(mode.id);
+      }
+    }
     if (t >= warmup) { s.starts++; s.waitTotal += t - joined; }
     s.busy++; s.active.set(job.id, { start: t, end, productId: job.productId });
     logEvent('service-start', t, n.id, job, w?{end,workerId:w.id}:{end});
-    if(w){
-      const stop=n.pauseStart;
-      if(offTime(n,t,end)>0){
-        segment(w,'Working',t,stop,n.id,n.id,job);
-        segment(w,'Waiting',stop,stop+n.pauseLength,n.id,n.id,job);
-        segment(w,'Working',stop+n.pauseLength,end,n.id,n.id,job);
-      }else segment(w,'Working',t,end,n.id,n.id,job);
-    }
     heap.push({ time: end, rank: 0, type: 'done', id: n.id, job,w });
   }
   function visit(job, t) {
@@ -335,8 +399,8 @@ function simulateRun(model, settings, record = true) {
     }
     const s = stats.get(id); if (!s) throw Error('A product route must use processing stations and the sink.');
     const explicit = bufferFor(job); integral(s, t);
-    const person=availableWorker(n.id);
-    if (s.busy+(reserved.get(n.id)||0)<s.capacity && !isPaused(n,t) && (!crew.length||person)){
+    const person=n.unattended?null:availableWorker(n.id);
+    if (s.busy+(reserved.get(n.id)||0)<s.capacity && !isPaused(n,t) && (!crew.length||n.unattended||person)){
       if(person)assign(n,s,job,t,t,person);else start(n,s,job,t,t);
     }
     else {
@@ -374,7 +438,7 @@ function simulateRun(model, settings, record = true) {
       let best=null;
       for(const n of stations){
         const s=stats.get(n.id),head=s.queue[s.head];
-        if(!head || isPaused(n,t) || s.busy+(reserved.get(n.id)||0)>=s.capacity || (best&&head.time>=best.head.time))continue;
+        if(n.unattended || !head || isPaused(n,t) || s.busy+(reserved.get(n.id)||0)>=s.capacity || (best&&head.time>=best.head.time))continue;
         const person=availableWorker(n.id);
         if(person)best={n,s,head,person};
       }
@@ -387,7 +451,7 @@ function simulateRun(model, settings, record = true) {
   const scheduleArrival = (product, time) => heap.push({ time, rank: 2, type: 'arrival', productId: product.id });
   for (const lot of lots)heap.push({time:lot.at,rank:-2,type:'receipt',lot});
   for (const product of products) scheduleArrival(product, 0);
-  for (const n of stations) if (n.pauseLength > 0) heap.push({ time: n.pauseStart + n.pauseLength, rank: 0, type: 'resume', id: n.id });
+  for(const n of stations)for(const stop of calendars[n.id])heap.push({time:stop.end,rank:0,type:'resume',id:n.id});
   if (warmup > 0) heap.push({ time: warmup, rank: -1, type: 'warmup' });
   while (heap.items.length) {
     const e = heap.pop(), t = e.time;
@@ -405,7 +469,7 @@ function simulateRun(model, settings, record = true) {
     if(e.type==='at-station'){
       const n=nodes.get(e.id),s=stats.get(e.id);e.w.station=n.id;
       if(isPaused(n,t)){
-        const until=n.pauseStart+n.pauseLength;
+        const until=activeStop(n,t).end;
         segment(e.w,'Waiting',t,until,n.id,n.id,e.job);
         heap.push({...e,time:until});continue;
       }
@@ -413,7 +477,7 @@ function simulateRun(model, settings, record = true) {
       start(n,s,e.job,t,e.joined,e.w);snapshot(s,t,e.job,bufferFor(e.job));continue;
     }
     if (e.type === 'resume') {
-      if(crew.length){dispatch(t);continue;}
+      if(crew.length&&!nodes.get(e.id).unattended){dispatch(t);continue;}
       const n = nodes.get(e.id), s = stats.get(e.id); integral(s, t);
       while (s.head < s.queue.length && s.busy < s.capacity) { const q = s.queue[s.head++]; start(n, s, q.job, t, q.time); }
       snapshot(s, t, null, null); continue;
@@ -437,7 +501,7 @@ function simulateRun(model, settings, record = true) {
       const n = nodes.get(e.id), s = stats.get(n.id); integral(s, t); s.active.delete(e.job.id); s.busy--; s.finished++;
       logEvent('service-complete', t, n.id, e.job);
       if(e.w)e.w.assigned=false;
-      if (!crew.length && s.head < s.queue.length && !isPaused(n, t)) { const queued = s.queue[s.head++]; start(n, s, queued.job, t, queued.time); if (s.head > 256 && s.head * 2 > s.queue.length) { s.queue = s.queue.slice(s.head); s.head = 0; } }
+      if ((!crew.length||n.unattended) && s.head < s.queue.length && !isPaused(n, t)) { const queued = s.queue[s.head++]; start(n, s, queued.job, t, queued.time); if (s.head > 256 && s.head * 2 > s.queue.length) { s.queue = s.queue.slice(s.head); s.head = 0; } }
       let targetPosition = e.job.position + 1;
       if(q && !finishQualityStep(n,e.job,t)){
         snapshot(s,t,e.job,bufferFor(e.job));if(crew.length)dispatch(t);continue;
@@ -470,7 +534,7 @@ function simulateRun(model, settings, record = true) {
   });
   const cost = stations.reduce((a, n) => a + (n.hourly ?? 0) * (n.servers ?? 1) * window / 3600, 0);
   const bottleneck = rows.slice().sort((a, b) => b.avgQueue - a.avgQueue || b.util - a.util)[0];
-  return { version: VERSION, config, tracks, rows, workers, inventory, quality, qualityTrace, totalScrap, arrivals: arrived, completed: observedFinished, totalCompleted: finished, totalArrivals: jobs, throughput: observedFinished / window * 3600, averageFlow: observedFinished ? totalFlow / observedFinished : null, rejected: observedRejected, wip: jobs - finished - rejected - totalScrap - (inventory?.waiting??0), reworked, cost, unitCost: observedFinished ? cost / observedFinished : null, bottleneck: bottleneck?.id ?? null, events: eventLog.length, processedEvents: eventCount, eventLog, eventLogTruncated: eventLog.length >= EVENT_LOG_LIMIT, productMetrics: [...productStats.values()] };
+  return { version: VERSION, config, tracks, rows, workers, calendars, inventory, quality, qualityTrace, totalScrap, arrivals: arrived, completed: observedFinished, totalCompleted: finished, totalArrivals: jobs, throughput: observedFinished / window * 3600, averageFlow: observedFinished ? totalFlow / observedFinished : null, rejected: observedRejected, wip: jobs - finished - rejected - totalScrap - (inventory?.waiting??0), reworked, cost, unitCost: observedFinished ? cost / observedFinished : null, bottleneck: bottleneck?.id ?? null, events: eventLog.length, processedEvents: eventCount, eventLog, eventLogTruncated: eventLog.length >= EVENT_LOG_LIMIT, productMetrics: [...productStats.values()] };
 }
 function frameAt(model, run, time) {
   const frame = {};
@@ -478,11 +542,12 @@ function frameAt(model, run, time) {
     const track = run?.tracks[n.id] ?? []; let lo = 0, hi = track.length;
     while (lo < hi) { const mid = (lo + hi) >> 1; if (track[mid].time <= time) lo = mid + 1; else hi = mid; }
     const row = track[lo - 1];
-    const paused = n.pauseLength > 0 && time >= n.pauseStart && time < n.pauseStart + n.pauseLength;
-    const off = (a, b) => n.pauseLength ? Math.max(0, Math.min(b, n.pauseStart + n.pauseLength) - Math.max(a, n.pauseStart)) : 0;
+    const stops=run?.calendars?.[n.id]??(n.pauseLength>0?[{start:n.pauseStart,end:n.pauseStart+n.pauseLength,before:0,reason:'Planned stop'}]:[]);
+    const stop=stops[stopIndex(stops,time)],paused=!!stop&&time>=stop.start;
+    const off=(a,b)=>stoppedTime(stops,b)-stoppedTime(stops,a);
     const duration = row ? row.end - row.start - off(row.start, row.end) : 0;
     const progress = duration > 0 ? (time - row.start - off(row.start, time)) / duration : 0;
-    frame[n.id] = { busy: paused ? 0 : row?.busy ?? 0, waiting: row?.waiting ?? 0, completed: row?.completed ?? 0, capacity: n.servers ?? 1, paused, progress: Math.min(1, Math.max(0, progress)) };
+    frame[n.id] = { busy: paused ? 0 : row?.busy ?? 0, waiting: row?.waiting ?? 0, completed: row?.completed ?? 0, capacity: n.servers ?? 1, paused,stopReason:paused?stop.reason:'', progress: Math.min(1, Math.max(0, progress)) };
   }
   if(run?.inventory){
     const rows=run.inventory.trace;let lo=0,hi=rows.length;
@@ -500,4 +565,5 @@ function sampleSummary(values) {
   return { n, mean, margin: T95[n - 1] * Math.sqrt(variance / n) };
 }
 export { workerPath, pathLength, routeBetween, simulateRun, normalizeConfig, validateModel, frameAt, sampleSummary, VERSION, mainRouteIds, normalizeProducts };
+
 

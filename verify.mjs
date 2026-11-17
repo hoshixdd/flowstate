@@ -149,3 +149,34 @@ const cappedSupply=simulateRun(cappedLots,{});assert.ok(cappedSupply.rejected>0)
 assert.equal(cappedSupply.rejected,cappedSupply.inventory.lots.reduce((a,l)=>a+l.rejected,0));
 assert.equal(cappedSupply.totalArrivals,cappedSupply.completed+cappedSupply.totalScrap+cappedSupply.rejected+cappedSupply.wip+cappedSupply.inventory.waiting);
 console.log('PASS FIFO supply, lot dispositions, same-time receipts, warm-up shortage, replay and conservation.');
+
+import {insertStation,workplaceSummary} from './dist/workplace.mjs';
+{
+ const bakery=template('bakery'),config={seed:42,horizon:14400};
+ const trial=simulateRun(bakery,config),c=trial.quality.counts[0];
+ assert.ok(c.exposed>0);assert.equal(c.exposed,c.opportunities);
+ bakery.nodes.find(n=>n.id==='oven').setting=205;
+ const adjusted=simulateRun(bakery,config);
+ assert.equal(adjusted.quality.counts[0].exposed,0);
+ assert.ok(workplaceSummary(adjusted).faults<workplaceSummary(trial).faults);
+ assert.ok(!trial.workers.some(w=>w.intervals.some(i=>i.kind==='Working'&&i.to==='oven')));
+ const laundry=template('laundry'),fold=simulateRun(laundry,{horizon:7200}).quality.counts[0];
+ assert.ok(fold.exposed>0 && fold.exposed<fold.opportunities);
+ const shop=template('printshop'),binder=shop.nodes.find(n=>n.id==='binder');
+ const initial=simulateRun(shop,{horizon:3600,seed:42}),stops=initial.calendars.binder;
+ assert.ok(stops.length>0);assert.deepEqual(stops,simulateRun(shop,{horizon:3600,seed:42}).calendars.binder);
+ assert.ok(initial.quality.counts[0].exposed>0);
+ for(const s of stops){const frame=frameAt(shop,initial,(s.start+s.end)/2);assert.equal(frame.binder.paused,true);}
+ binder.reliability={life:604800,repair:120,pmAge:80,pmTime:20};binder.pauseStart=40;binder.pauseLength=60;
+ const serviced=simulateRun(shop,{horizon:600,seed:42});
+ assert.deepEqual(serviced.calendars.binder.slice(0,2).map(s=>[s.start,s.end,s.reason]),[[40,100,'Planned stop'],[140,160,'Preventive maintenance']]);
+ const supplied=template('materials'),mode=supplied.quality.modes[0];mode.rate=0;mode.condition={type:'lot',threshold:1,rate:100};
+ const lot=simulateRun(supplied,{horizon:3600}).quality.counts[0];
+ assert.equal(lot.exposed,2);assert.equal(lot.faults,2);
+ const line=template('lab');line.products=[{id:'tray',name:'Tray',interval:30,route:['n1','n2','n3','n4']}];
+ insertStation(line,{id:'bench',name:'Weigh',type:'processor',seconds:8,x:200,y:200,unattended:false},'n1','n2');
+ assert.deepEqual(line.products[0].route,['n1','bench','n2','n3','n4']);assert.deepEqual(validateModel(line),[]);
+ assert.ok(simulateRun(line,{horizon:600}).rows.find(row=>row.id==='bench').starts>0);
+ console.log('PASS workplace routes, staffed and unattended service, conditional quality, lot boundaries, reproducible breakdowns and preventive maintenance.');
+}
+

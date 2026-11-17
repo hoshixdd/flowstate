@@ -76,3 +76,14 @@ Open **Walking routes → Open packing aisle example** or `Flowstate.html#walkin
 Open **Materials → Open carton supply example** or `Flowstate.html#materials-study`. Receiving issues one carton blank to each order in FIFO order. A delivery at second 0 sets opening stock. Deliveries precede orders at the same timestamp, and simultaneous lots are consumed in schedule row order. Orders wait before entering production if stock is empty. One consumed unit stays linked to its order through inspection, rework, shipment, scrap or buffer rejection. This version models one shared input material and scheduled deliveries.
 
 The example supplies 30 blanks at opening and 150 more at 1,800 seconds. Compare that with the same second lot at 600 seconds. The run starts empty and lasts one hour. **Review lots** shows the full-run balance by supplier lot, the disposition of each order, a trace CSV, and simulated shortage time. Shortage is elapsed time with at least one order awaiting material. Order-minutes sum the wait across all such orders. Neither measures machine downtime. Both time metrics are clipped to the observation window. Orders still awaiting material are reported separately from work in progress on the line.
+
+## Workplace studies
+
+Open **Workplace** from Studio to build a process or load a bakery, print-finishing shop or laundry. Insert equipment between two stations, specify seconds per job and parallel capacity, and select staffed or unattended operation. Each job represents one tray, print job or linen load. Parallel capacity represents independent service places. It does not synchronize multiple jobs into a batch.
+
+In **Fault rules**, choose an observable defect, its source, the operating condition, and the normal and exposed probabilities. Exposure is evaluated when service starts. Quality events are counted when service finishes. Conditions include a high/low station setting, pre-service delay, a recent restart, and the first starts from a material lot. Estimate the two probabilities separately from your own counts of faulty units and units checked under each condition.
+
+**Maintenance** simulates station-wide breakdowns with a seeded Weibull failure age (shape 2), fixed repair times and optional preventive replacement. Age advances during online time, including idle time. Service pauses during downtime and resumes with the remaining work. **Shift review** shows exposed and unexposed counts, equipment stops and the previous run when you apply a change. Each comparison uses the primary run at the configured seed. Use additional replications and workplace observations before estimating real savings.
+
+Examples open directly at `#bakery-study`, `#print-study` and `#laundry-study`. The examples use illustrative times, settings and fault probabilities.
+

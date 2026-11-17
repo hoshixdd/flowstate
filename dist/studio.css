@@ -66,3 +66,10 @@ body.floor-expanded{overflow:hidden}.floor-expanded .modelpane{position:fixed;in
 #dialog:has(#walkForm){width:min(740px,94vw)}#walkMap{display:block;width:100%;height:auto;background:#edf4f5;border:1px solid #c4d6dc;border-radius:8px;cursor:crosshair}#walkMap text{font:600 12px system-ui;fill:#29444b;paint-order:stroke;stroke:#edf4f5;stroke-width:3px}#walkForm details{margin:12px 0}#walkForm summary{cursor:pointer;margin-bottom:8px}#walkError{color:#904029}
 
 #dialog:has(#matForm),#dialog:has(#matGenealogy){width:min(810px,94vw)}#matTable input{min-width:85px}#matGenealogy{margin:12px 0}#matError{color:#924324}#supplyDeck{background:#214645}#supplyDeck small{color:#bce6cc}
+
+#dialogbody form[id^="wp"] .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:8px 16px}
+#dialogbody form[id^="wp"] .checkline{display:flex;align-items:center;gap:10px;margin-block:14px}
+#dialogbody .checkline input[type="checkbox"]{width:auto;margin:0}
+#wpError:not(:empty){border-left:3px solid #a74631;padding:8px 12px;color:#7a3021}
+#dialogbody [data-wtab][aria-pressed="true"]{background:#164c43;color:white}
+
