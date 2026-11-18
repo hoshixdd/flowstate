@@ -25,15 +25,18 @@ Open **Worker lab → Open staffed packing factory**. Follow a worker and expand
 
 ## Run locally
 
-Serve `dist` over HTTP so module workers can load:
+Open the React studio:
 
-```powershell
-npx serve dist -l 4173
+```sh
+npm ci
+npm run dev
 ```
 
-Then open `http://127.0.0.1:4173`.
+Open `http://127.0.0.1:4173`. Use `npm run build` for a static deployment from `build/` and `npm run preview` to check that build locally. Set the `PORT` environment variable to use another port.
 
-To build a single-file offline copy:
+Drag the 3D floor to orbit or focus it and use the arrow keys. Use the mouse wheel or the plus and minus keys to zoom. The station chips and inspector select the same equipment as the floor. Switch to **Floor map** for a top-down view of the same replay. Flowstate opens that map automatically if WebGL 2 or the renderer is unavailable. The **2D editor** edits the underlying process layout. Reduced motion disables interface transitions and automatic camera tracking.
+
+For the standalone legacy studio, open `Flowstate.html` or rebuild the offline file:
 
 ```powershell
 node build-offline.mjs Flowstate.html

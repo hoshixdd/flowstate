@@ -5,11 +5,10 @@ import {openStudy} from './study-lab.mjs';
 import {openQualityLab} from './quality-lab.mjs';
 import {kinds,templates,template} from './model.mjs';
 import {validateModel,normalizeConfig,frameAt,VERSION,mainRouteIds,normalizeProducts} from './engine.mjs';
-import {createFactory} from './factory.mjs';
+export function startStudio({createFloor, createWorker, onDialogOpen}) {
 const $=id=>document.getElementById(id);
 const escape=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uuid=()=>crypto.randomUUID(), clone=structuredClone, storageKey='flowstate.studio.v2';
-const workerURL=new URL('./worker.mjs',import.meta.url);
 const defaults={horizon:3600,warmup:0,seed:42,reps:1};
 const fmt=(v,d=1)=>v==null?'—':v.toLocaleString(undefined,{maximumFractionDigits:d});
 const timeLabel=t=>[Math.floor(t/3600),Math.floor((t%3600)/60),Math.floor(t%60)].map(v=>String(v).padStart(2,'0')).join(':');
@@ -22,24 +21,33 @@ try{
   else{const legacy=JSON.parse(localStorage.getItem('flowstate.process.v1')||'null');const first=record(legacy?.version===1&&Array.isArray(legacy.nodes)?legacy:template('lab'));db={version:2,active:first.id,projects:[first]};}
 }catch{const first=record(template('lab'));db={version:2,active:first.id,projects:[first]};warning='Previous data could not be loaded';}
 let project=db.projects.find(p=>p.id===db.active),m=project.model,selected=m.nodes.find(n=>n.type==='processor'&&n.name==='Assembly')?.id??m.nodes[0]?.id;
-let past=[],future=[],result=null,worker=null,view='3d',cursor=0,playing=false,raf=0,lastPaint=0,noticeTimer,linkMode=false,linkFrom=null;
+let past=[],future=[],result=null,worker=null,view='3d',cursor=0,playing=false,raf=0,lastPaint=0,noticeTimer,linkMode=false,linkFrom=null,runFailure='';
 function notify(text){$('notice').textContent=text;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>$('notice').textContent='',4200);}
 function save(){try{localStorage.setItem(storageKey,JSON.stringify(db));warning='';}catch{warning='Storage full or unavailable · export project';} $('save').textContent=warning||'Saved on this device';}
-function modal(title,html){$('dialogtitle').textContent=title;$('dialogbody').innerHTML=html;if(!$('dialog').open)$('dialog').showModal();}
+function modal(title,html){
+ const dialog=$('dialog');
+ $('dialogtitle').textContent=title;$('dialogbody').innerHTML=html;
+ if(!dialog.open){dialog.showModal();onDialogOpen?.(dialog);}
+}
 $('close').onclick=()=>$('dialog').close();
 let observation=null;
-const factory=createFactory($('factory'),id=>selectStation(id),person=>{
+const factory=createFloor(id=>selectStation(id),person=>{
  $('followWorker').value=String(person);changeWorker();
 });
 function selectStation(id){selected=id;render();}
 function stopPlaying(){playing=false;cancelAnimationFrame(raf);$('play').textContent='▶';}
 function cancelRun(){if(worker){worker.terminate();worker=null;} $('run').textContent='▶  Run simulation';}
-function clearRun(){observation=null;cancelRun();stopPlaying();result=null;cursor=0;}
+function clearRun(){observation=null;cancelRun();stopPlaying();result=null;cursor=0;runFailure='';}
 function remember(){project.archives.unshift({revision:project.revision,model:clone(m),config:{...project.config},at:project.updated});project.archives=project.archives.slice(0,12);}
 function commit(edit,keepRun=false){past.push({model:clone(m),config:{...project.config}});past=past.slice(-60);future=[];remember();edit();project.model=m;project.revision++;project.updated=new Date().toISOString();if(!keepRun)clearRun();save();render();}
 function history(from,to){if(!from.length)return;remember();to.push({model:clone(m),config:{...project.config}});const state=from.pop();m=project.model=state.model;project.config=state.config;project.revision++;project.updated=new Date().toISOString();clearRun();save();render();}
 $('undo').onclick=()=>history(past,future);$('redo').onclick=()=>history(future,past);
-function setView(next){view=next;$('stage').hidden=view!=='3d';$('two').hidden=view!=='2d';$('view3d').setAttribute('aria-pressed',view==='3d');$('view2d').setAttribute('aria-pressed',view==='2d');if(view==='3d')paint();else draw();}
+function setView(next){
+ if(next==='2d'&&document.body.classList.contains('floor-expanded'))$('expandFloor').click();
+ view=next;$('stage').hidden=view!=='3d';$('two').hidden=view!=='2d';
+ $('view3d').setAttribute('aria-pressed',view==='3d');$('view2d').setAttribute('aria-pressed',view==='2d');
+ factory.setView?.(view);if(view==='2d')draw();paint();
+}
 $('view3d').onclick=()=>setView('3d');$('view2d').onclick=()=>setView('2d');$('fit').onclick=()=>{observation=null;$('followWorker').value='0';factory.reset();paint();};$('focusStation').onclick=()=>{observation=null;$('followWorker').value='0';factory.focus();paint();};
 function observerHud(run){
  const id=Number($('followWorker').value),w=run?.workers?.find(w=>w.id===id);
@@ -83,7 +91,7 @@ function render(){
  $('link').setAttribute('aria-pressed',String(linkMode));$('link').textContent=linkMode?'Cancel connect':'Connect';
  $('stationPick').innerHTML=m.nodes.map(s=>'<option value="'+escape(s.id)+'" '+(s.id===selected?'selected':'')+'>'+escape(s.name)+'</option>').join('');
  $('scrub').max=project.config.horizon;$('scrub').disabled=$('play').disabled=!result;
- draw();inspector(n);overview();analytics();summary();setView(view);paint();
+ draw();inspector(n);overview();analytics();summary();setView(view);
 }
 function coordinates(event){return new DOMPoint(event.clientX,event.clientY).matrixTransform($('graph').getScreenCTM().inverse());}
 const colors={source:'#d6e9c9',processor:'#dce6f1',inspection:'#f3e4c5',queue:'#e5dbef',sink:'#d4e9e0'};
@@ -143,12 +151,14 @@ function overview(){const p=m.nodes.filter(n=>['processor','inspection'].include
  $('idealMetrics').innerHTML=metric('Limiting station',good&&slow?slow.name:'—','Mean service capacity')+metric('Station limit',good&&slow?fmt(3600*(slow.servers??1)/slow.seconds)+' / h':'—','Before losses, starvation or rework')+metric('Service per pass',good?fmt(p.reduce((a,n)=>a+n.seconds,0))+' s':'—','Without waiting or repeat visits');}
 function summary(){
  const products=normalizeProducts(m),issues=validateModel(m),state=$('runState'),signal=$('runSignal'),facts=$('runFacts');
- if(!result){state.textContent=issues.length?'Needs connection check':'Ready to simulate';signal.className=issues.length?'warn':'';facts.innerHTML='<span>'+products.length+' product'+(products.length===1?'':'s')+'</span><span>'+m.nodes.length+' stations · '+m.edges.length+' connections</span><span>'+ (issues.length?'Check model before running':'2D editor active') +'</span>';return;}
+ if(worker){state.textContent='Running simulation';signal.className='';facts.textContent='Calculating station and queue activity…';return;}
+ if(runFailure){state.textContent='Run failed';signal.className='warn';facts.textContent=runFailure;return;}
+ if(!result){state.textContent=issues.length?'Needs connection check':'Ready to simulate';signal.className=issues.length?'warn':'';facts.innerHTML='<span>'+products.length+' product'+(products.length===1?'':'s')+'</span><span>'+m.nodes.length+' stations · '+m.edges.length+' connections</span><span>'+ (issues.length?'Check model before running':'Model ready') +'</span>';return;}
  const r=result.primary,b=r.rows.find(n=>n.id===r.bottleneck);state.textContent='Run complete';signal.className='done';facts.innerHTML='<span>'+fmt(r.throughput)+' / h throughput</span><span>'+fmt(r.completed,0)+' completed · '+fmt(r.events,0)+' events</span><span>'+(b?'Bottleneck · '+escape(b.name):'No bottleneck identified')+'</span>';
 }
 function analytics(){
  $('report').disabled=!result;$('windowNote').textContent=result?'Seed '+result.primary.config.seed+' · '+fmt(result.primary.events,0)+' recorded events':'';
- if(!result){$('metrics').innerHTML='';$('details').innerHTML='<p>Run this revision to see throughput, station queues, and 3D playback.</p>';return;}
+ if(!result){$('metrics').innerHTML='';$('details').innerHTML='<p>Run this revision to see throughput, station queues, and floor playback.</p>';return;}
  const r=result.primary,b=r.rows.find(n=>n.id===r.bottleneck);
  $('metrics').innerHTML=metric('Throughput',fmt(r.throughput)+' / h',r.completed+' completed in the observation window')+metric('Average flow time',r.averageFlow==null?'—':fmt(r.averageFlow)+' s','Time in system per completed unit')+metric('Queue pressure',b?.name??'—',b?fmt(b.avgQueue)+' waiting on average':'No processing stations')+metric('Work in progress',fmt(r.wip),'Units still in the system at run end');
  const rows=r.rows.map(s=>'<tr><td>'+escape(s.name)+'</td><td>'+fmt(s.util*100)+'% <span class="bar"><i style="width:'+Math.min(100,s.util*100)+'%"></i></span></td><td>'+fmt(s.avgQueue)+'</td><td>'+s.peak+'</td><td>'+fmt(s.avgWait)+' s</td><td>'+s.rejected+'</td></tr>').join('');
@@ -160,13 +170,16 @@ function analytics(){
  let points='0,49',prev=0;const from=r.config.warmup,end=r.config.horizon,step=Math.max(1,Math.ceil(track.length/700));for(let i=0;i<track.length;i+=step){const s=track[i];if(s.time<from){prev=s.waiting;continue;}const x=(s.time-from)/(end-from)*600;points+=' '+x+','+(49-45*Math.min(1,prev/max))+' '+x+','+(49-45*Math.min(1,s.waiting/max));prev=s.waiting;}points+=' 600,'+(49-45*Math.min(1,prev/max));
  $('details').insertAdjacentHTML('beforeend','<div class="chartbox"><div class="trendlabel"><b>'+escape(b.name)+' · waiting units</b><span>Peak '+b.peak+'</span></div><svg class="trend" viewBox="0 0 600 52" preserveAspectRatio="none" role="img" aria-label="Queue history at '+escape(b.name)+'"><polyline points="'+points+'" fill="none" stroke="#3b765c" stroke-width="2" vector-effect="non-scaling-stroke"/></svg><div class="trendlabel"><span>'+timeLabel(from)+'</span><span>'+timeLabel(end)+'</span></div></div>');}}
 function runModel(auto=false){
- if(worker){cancelRun();notify('Run cancelled.');return;}
+ if(worker){cancelRun();summary();notify('Run cancelled.');return;}
  const issues=validateModel(m);if(issues.length){if(!auto)modal('Check model','<ul>'+issues.map(s=>'<li>'+escape(s)+'</li>').join('')+'</ul>');return;}
- try{const config=normalizeConfig(project.config);const job=new Worker(workerURL,{type:'module'});worker=job;$('run').textContent='Cancel run';stopPlaying();
+ const fail=message=>{cancelRun();runFailure=message;summary();notify(message);};
+ runFailure='';
+ try{const config=normalizeConfig(project.config);const job=createWorker();worker=job;$('run').textContent='Cancel run';stopPlaying();
+ summary();
  job.onmessage=e=>{if(worker!==job)return;if(e.data.progress){$('run').textContent='Cancel · '+e.data.progress+'/'+config.reps;return;}
- cancelRun();if(e.data.error){notify(e.data.error);return;}result=e.data.result;cursor=auto?Math.min(180,config.horizon):0;render();if(!auto)notify('Run complete. Press play or scrub the timeline.');};
- job.onerror=e=>{cancelRun();notify(e.message||'Simulation worker could not start.');};
- job.postMessage({model:clone(m),config});}catch(e){notify(e.message);}
+ if(e.data.error){fail(e.data.error);return;}cancelRun();result=e.data.result;cursor=auto?Math.min(180,config.horizon):0;render();if(!auto)notify('Run complete. Press play or scrub the timeline.');};
+ job.onerror=e=>{if(worker===job)fail(e.message||'Simulation worker could not start. Try running again.');};
+ job.postMessage({model:clone(m),config});}catch(e){fail(e.message);}
 }
 $('run').onclick=()=>runModel();
 $('checks').onclick=()=>{const issues=validateModel(m);modal(issues.length?'Check model':'Model is connected',issues.length?'<ul>'+issues.map(s=>'<li>'+escape(s)+'</li>').join('')+'</ul>':'<p>All stations have valid operating rules and a continuous route from source to sink.</p>');};
@@ -241,7 +254,7 @@ function tournament(){
  const issues=validateModel(m);if(issues.length){notify(issues[0]);return;}
  const key=project.id, revision=project.revision, config=normalizeConfig(project.config);
  modal('Capacity experiment','<p>Try one additional parallel server at each eligible station. Every candidate uses the same model, duration, seeds and warm-up. Ranking uses mean throughput, then added operating cost.</p><div id="trialResult" class="note">Preparing scenarios…</div><button id="cancelTrial">Cancel experiment</button>');
- let trial;try{trial=new Worker(workerURL,{type:'module'});}catch(e){notify(e.message);return;}
+ let trial;try{trial=createWorker();}catch(e){notify(e.message);return;}
  let ended=false;function finish(){if(ended)return;ended=true;trial.terminate();$('dialog').removeEventListener('close',finish);}
  $('dialog').addEventListener('close',finish);$('cancelTrial').onclick=()=>{$('dialog').close();finish();};
  trial.onmessage=e=>{if(ended)return;if(e.data.progress){$('trialResult').textContent=e.data.progress+' replication(s) finished';return;}
@@ -349,7 +362,7 @@ function qualityPanel(){
    openProposal:candidate=>{candidate.title=(m.title+' · proposed').slice(0,120);addProject(candidate,project.config);},
    saveTrial:report=>{if(project===owner&&owner.revision===revision){owner.qualityTrial={revision,report};save();}},
    trial:(proposed,reps)=>new Promise((resolve,reject)=>{
-     const job=new Worker(workerURL,{type:'module'});
+     const job=createWorker();
      job.onmessage=e=>{if(e.data.progress)return;job.terminate();if(e.data.error)reject(Error(e.data.error));else resolve(e.data.comparison);};
      job.onerror=e=>{job.terminate();reject(Error(e.message||'Quality trial failed.'));};
      job.postMessage({mode:'quality-trial',model:m,proposed,config:{...project.config,reps}});
@@ -417,10 +430,20 @@ $('workers').onclick=workersPanel;
 function changeWorker(){observation=null;setView('3d');paint();}
 $('followWorker').onchange=changeWorker;
 $('expandFloor').onclick=()=>{
+ const pane=$('stage').closest('.modelpane'), workspace=pane.parentElement;
  const expanded=document.body.classList.toggle('floor-expanded');
+ for(const region of [document.querySelector('header'),...workspace.parentElement.children,...workspace.children]){
+   if(region===workspace||region===pane||region===$('dialog')||region===$('notice'))continue;
+   region.inert=expanded;
+ }
+ if(expanded){
+   pane.setAttribute('role','dialog');pane.setAttribute('aria-modal','true');pane.setAttribute('aria-label','Expanded process floor');
+ }else{
+   pane.removeAttribute('role');pane.removeAttribute('aria-modal');pane.removeAttribute('aria-label');
+ }
  $('expandFloor').setAttribute('aria-pressed',String(expanded));$('expandFloor').textContent=expanded?'Exit expanded view':'Expand floor';
 };
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.body.classList.contains('floor-expanded')&&!$('dialog').open)$('expandFloor').click();});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.body.classList.contains('floor-expanded')&&!$('dialog').open){$('expandFloor').click();$('expandFloor').focus();}});
 $('markObservation').onclick=()=>{
  const r=result?.primary;if(!r?.workers?.length)return;
  if(!observation){
@@ -446,4 +469,4 @@ function openStudyRoute(){
 }
 if(!openStudyRoute())runModel(true);
 window.addEventListener('hashchange',openStudyRoute);
-
+}
