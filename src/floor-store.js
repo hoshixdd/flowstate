@@ -3,6 +3,7 @@ export function createFloorStore() {
   let view = '3d';
   let selectStation;
   let selectWorker;
+  let replayStation;
   const listeners = new Set();
   const viewListeners = new Set();
 
@@ -24,9 +25,11 @@ export function createFloorStore() {
     },
     select: (id) => selectStation?.(id),
     follow: (id) => selectWorker?.(id),
-    connect(select, follow) {
+    replay: (event) => replayStation?.(event),
+    connect(select, follow, replay) {
       selectStation = select;
       selectWorker = follow;
+      replayStation = replay;
       return {
         setView(next) {
           if (view === next) return;

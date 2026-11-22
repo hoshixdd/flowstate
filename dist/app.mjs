@@ -1,3 +1,4 @@
+import { openEventReview } from './event-review.mjs';
 import {openWorkplace,workplaceSummary} from './workplace.mjs';
 import {openMaterials} from './materials-lab.mjs';
 import {openWalkingLab} from './walking-lab.mjs';
@@ -33,7 +34,7 @@ $('close').onclick=()=>$('dialog').close();
 let observation=null;
 const factory=createFloor(id=>selectStation(id),person=>{
  $('followWorker').value=String(person);changeWorker();
-});
+}, replayEvent);
 function selectStation(id){selected=id;render();}
 function stopPlaying(){playing=false;cancelAnimationFrame(raf);$('play').textContent='▶';}
 function cancelRun(){if(worker){worker.terminate();worker=null;} $('run').textContent='▶  Run simulation';}
@@ -90,6 +91,7 @@ function render(){
  $('stageStatus').textContent=floorStatus();
  $('link').setAttribute('aria-pressed',String(linkMode));$('link').textContent=linkMode?'Cancel connect':'Connect';
  $('stationPick').innerHTML=m.nodes.map(s=>'<option value="'+escape(s.id)+'" '+(s.id===selected?'selected':'')+'>'+escape(s.name)+'</option>').join('');
+ $('reviewEvents').disabled = !result;
  $('scrub').max=project.config.horizon;$('scrub').disabled=$('play').disabled=!result;
  draw();inspector(n);overview();analytics();summary();setView(view);
 }
@@ -163,8 +165,8 @@ function analytics(){
  $('metrics').innerHTML=metric('Throughput',fmt(r.throughput)+' / h',r.completed+' completed in the observation window')+metric('Average flow time',r.averageFlow==null?'—':fmt(r.averageFlow)+' s','Time in system per completed unit')+metric('Queue pressure',b?.name??'—',b?fmt(b.avgQueue)+' waiting on average':'No processing stations')+metric('Work in progress',fmt(r.wip),'Units still in the system at run end');
  const rows=r.rows.map(s=>'<tr><td>'+escape(s.name)+'</td><td>'+fmt(s.util*100)+'% <span class="bar"><i style="width:'+Math.min(100,s.util*100)+'%"></i></span></td><td>'+fmt(s.avgQueue)+'</td><td>'+s.peak+'</td><td>'+fmt(s.avgWait)+' s</td><td>'+s.rejected+'</td></tr>').join('');
  const productRows=(r.productMetrics??[]).map(p=>'<tr><td><span class="swatch" style="background:'+escape(p.color)+'"></span>'+escape(p.name)+'</td><td>'+fmt(p.arrivals)+'</td><td>'+fmt(p.completed)+'</td><td>'+fmt(p.rejected)+'</td><td>'+fmt(p.reworked)+'</td><td>'+escape(productRouteLabel(p.route))+'</td></tr>').join('');
- const events=(r.eventLog??[]).slice(0,24).map(e=>'<tr><td>'+timeLabel(e.time)+'</td><td>'+escape(e.type)+'</td><td>'+escape(m.nodes.find(n=>n.id===e.stationId)?.name??'—')+'</td><td>'+escape(r.productMetrics?.find(p=>p.id===e.productId)?.name??'—')+'</td><td>'+escape(String(e.jobId??'—'))+'</td></tr>').join('');
- $('details').innerHTML='<h3>Station performance</h3><p>'+fmt(r.arrivals)+' arrivals · '+fmt(r.rejected)+' rejected · ₱'+fmt(r.cost,2)+' configured operating cost · '+result.throughput.n+' replication(s), mean '+fmt(result.throughput.mean)+' units/h'+(result.throughput.margin==null?'':' (95% CI ±'+fmt(result.throughput.margin)+')')+'</p><table><thead><tr><th>Station</th><th>Utilization</th><th>Mean queue</th><th>Peak queue</th><th>Mean wait¹</th><th>Rejected</th></tr></thead><tbody>'+rows+'</tbody></table><p>¹ Waiting time for units starting service in the observation window. Queue length is time-weighted. Utilization excludes station downtime.</p>'+(productRows?'<h3>Product flows</h3><table><thead><tr><th>Product</th><th>Arrivals</th><th>Completed</th><th>Rejected</th><th>Rework</th><th>Route</th></tr></thead><tbody>'+productRows+'</tbody></table>':'')+'<details class="eventlog"><summary>Recorded event playback · '+fmt(r.events,0)+' events</summary><p class="muted">The 3D floor replays station state from this discrete-event log. Showing the first 24 records.</p><table><thead><tr><th>Time</th><th>Event</th><th>Station</th><th>Product</th><th>Job</th></tr></thead><tbody>'+events+'</tbody></table></details>';
+ $('details').innerHTML='<h3>Station performance</h3><p>'+fmt(r.arrivals)+' arrivals · '+fmt(r.rejected)+' rejected · ₱'+fmt(r.cost,2)+' configured operating cost · '+result.throughput.n+' replication(s), mean '+fmt(result.throughput.mean)+' units/h'+(result.throughput.margin==null?'':' (95% CI ±'+fmt(result.throughput.margin)+')')+'</p><table><thead><tr><th>Station</th><th>Utilization</th><th>Mean queue</th><th>Peak queue</th><th>Mean wait¹</th><th>Rejected</th></tr></thead><tbody>'+rows+'</tbody></table><p>¹ Waiting time for units starting service in the observation window. Queue length is time-weighted. Utilization excludes station downtime.</p>'+(productRows?'<h3>Product flows</h3><table><thead><tr><th>Product</th><th>Arrivals</th><th>Completed</th><th>Rejected</th><th>Rework</th><th>Route</th></tr></thead><tbody>'+productRows+'</tbody></table>':'')+'<div class="event-summary"><strong>Recorded events</strong><button id="reviewResults">Review '+fmt(r.events,0)+' events</button></div>';
+ $('reviewResults').onclick = reviewEvents;
  if(r.inventory){const v=r.inventory;$('details').insertAdjacentHTML('afterbegin','<h3>Material availability</h3><p>'+escape(v.name)+' · '+fmt(v.shortageSeconds/60)+' minutes with orders awaiting material · '+v.waiting+' orders still awaiting release · '+v.onHand+' units of material left.</p>');}
  if(b){const q=m.nodes.find(n=>n.type==='queue'&&m.edges.some(([a,d])=>a===n.id&&d===b.id));const track=r.tracks[q?.id??b.id]??[],max=Math.max(1,b.peak);
  let points='0,49',prev=0;const from=r.config.warmup,end=r.config.horizon,step=Math.max(1,Math.ceil(track.length/700));for(let i=0;i<track.length;i+=step){const s=track[i];if(s.time<from){prev=s.waiting;continue;}const x=(s.time-from)/(end-from)*600;points+=' '+x+','+(49-45*Math.min(1,prev/max))+' '+x+','+(49-45*Math.min(1,s.waiting/max));prev=s.waiting;}points+=' 600,'+(49-45*Math.min(1,prev/max));
@@ -346,12 +348,27 @@ function openRolesFactory(){
  if(p)activate(p);else addProject(template('roles'));
  $('speed').value='1';setView('3d');
 }
-function replayFault(event){
+function reviewEvents() {
+ const run = result?.primary;
+ if (!run) return;
+ stopPlaying();
+ openEventReview({ run, model: m, modal, timeLabel, replay(event) {
+   if (result?.primary !== run) { $('dialog').close(); notify('The run changed. Open event review again.'); return; }
+   replayEvent(event);
+   $('reviewEvents').focus({ preventScroll: true });
+ } });
+}
+$('reviewEvents').onclick = reviewEvents;
+function replayEvent(event){
  stopPlaying();observation=null;$('dialog').close();cursor=event.time;selected=event.stationId;
+ $('floorLayer').value = 'live';
  $('followWorker').value='0';setView('3d');render();factory.focus();paint();
+ $('stage').scrollIntoView({block:'center'});
+}
+function replayFault(event){
+ replayEvent(event);
  const name=m.nodes.find(n=>n.id===selected)?.name??selected;
  if(event.jobId!=null)$('qualityStatus').textContent='Unit '+event.jobId+' · '+name+' · '+event.kind+' · '+timeLabel(cursor);
- $('stage').scrollIntoView({block:'center'});
 }
 function qualityPanel(){
  if(!m.quality){openQualityFactory();return;}

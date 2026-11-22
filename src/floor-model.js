@@ -12,6 +12,21 @@ const qualityLabels = {
 };
 const eventsByRun = new WeakMap();
 
+// A replay frame shows the final state after all events at the same instant.
+export function firstPeakQueue(track, from, until) {
+  let peak = null;
+  for (let index = 0; index < track.length; index++) {
+    const { time, waiting } = track[index];
+    if (time > until) break;
+    const nextTime = track[index + 1]?.time;
+    if (nextTime === time || nextTime <= from) continue;
+    if (waiting > (peak?.waiting ?? 0)) {
+      peak = { time: Math.max(from, time), waiting };
+    }
+  }
+  return peak;
+}
+
 function lastAt(events, time, field) {
   let low = 0;
   let high = events.length;
