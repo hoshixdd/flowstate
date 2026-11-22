@@ -73,3 +73,30 @@ body.floor-expanded{overflow:hidden}.floor-expanded .modelpane{position:fixed;in
 #wpError:not(:empty){border-left:3px solid #a74631;padding:8px 12px;color:#7a3021}
 #dialogbody [data-wtab][aria-pressed="true"]{background:#164c43;color:white}
 
+
+.event-summary, .event-nav, .event-pagination { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.event-summary { padding: 12px 17px; border-top: 1px solid #dae2e8; font-size: 14px; }
+.transport button.review-events { width: auto; height: auto; white-space: nowrap; padding: 6px 10px; color: #174c62; border-color: #a6bdc8; font-size: 13px; }
+.event-review { color: #192f40; }
+.event-context { margin: 3px 0 16px; color: #496071; font-size: 14px; }
+.event-filters { display: grid; grid-template-columns: 1.4fr 1.2fr 1fr; gap: 10px; }
+.event-filters label { min-width: 0; font-size: 14px; color: #385466; }
+.event-filters :is(input,select) { min-height: 40px; width: 100%; margin-top: 5px; font-size: 14px; }
+.event-nav { padding: 9px 0; font-size: 14px; border-bottom: 1px solid #bfcfd8; }
+.event-rows { padding: 0; margin: 0; list-style: none; max-height: min(46dvh, 450px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.event-rows li + li { border-top: 1px solid #e0e8ed; }
+.event-rows button { width: 100%; border: 0; border-radius: 0; padding: 9px 6px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 14px; align-items: center; text-align: left; color: #233f50; }
+.event-rows button:hover, .event-rows button:focus-visible { background: #ebf4f5; }
+.event-rows button:focus-visible { outline: 2px solid #176a79; outline-offset: -2px; }
+.event-time { font: 13px ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
+.event-rows strong, .event-rows small { display: block; overflow-wrap: anywhere; }
+.event-rows strong { font-size: 15px; }
+.event-rows small { margin-top: 3px; font-size: 13px; font-weight: 400; color: #4d6573; letter-spacing: 0; text-transform: none; }
+.event-action { font-size: 13px; color: #116377; }
+.event-pagination { padding-top: 10px; border-top: 1px solid #bfcfd8; font-size: 13px; }
+@media (max-width: 550px) {
+  .event-filters { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 6px 10px; }
+  .event-filters label:last-child { grid-column: 1/-1; }
+  .event-filters :is(input,select) { font-size: 16px; }
+  .event-rows button { gap: 8px; }
+}

@@ -2,7 +2,7 @@ import {readFileSync,writeFileSync} from 'node:fs';
 import path from 'node:path';
 const folder=path.resolve('dist');
 const read=name=>readFileSync(path.join(folder,name),'utf8');
-const modules=['daylight.mjs','quality-lab.mjs','materials-lab.mjs','work-study.mjs','study-lab.mjs','model.mjs','engine.mjs','workplace.mjs','walking-lab.mjs','factory.mjs','worker.mjs','app.mjs','legacy.mjs'];
+const modules=['event-review.mjs','daylight.mjs','quality-lab.mjs','materials-lab.mjs','work-study.mjs','study-lab.mjs','model.mjs','engine.mjs','workplace.mjs','walking-lab.mjs','factory.mjs','worker.mjs','app.mjs','legacy.mjs'];
 const files=Object.fromEntries(modules.map(name=>[name,read(name)]));
 // A file-origin worker cannot fetch a second blob module in some browsers.
 files['worker.mjs']=files['engine.mjs'].replace(/^export \{[^\n]+$/m,'')+'\n'+files['worker.mjs'].replace(/^import [^\n]+$/m,'');

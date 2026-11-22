@@ -36,7 +36,6 @@ function Navigation() {
 function RunHeader() {
   return (
     <>
-      <div className="breadcrumb">Workspace <b aria-hidden="true">/</b> Simulation studio</div>
       <div className="titlebar">
         <div><h1 id="title" /><p id="category" /></div>
         <div className="actions">
@@ -77,6 +76,7 @@ function ReplayTools() {
       </div>
       <div className="transport">
         <button id="play" aria-label="Play or pause replay">▶</button>
+        <button id="reviewEvents" className="review-events" disabled>Event review</button>
         <strong id="clock">00:00:00</strong>
         <input id="scrub" aria-label="Simulation time" type="range" min="0" max="3600" defaultValue="0" step="1" />
         <select id="speed" aria-label="Playback speed" defaultValue="60">
@@ -116,6 +116,10 @@ function Workspace({ floor }) {
               <option value="Proposed">Proposed study route</option>
             </select>
             <button id="expandFloor" aria-pressed="false">Expand floor</button>
+            <div className="camera-tools">
+              <button id="focusStation" className="focusstation">Station close-up</button>
+              <button id="fit" className="fit">Reset view</button>
+            </div>
           </div>
           <div className="floor-body">
             {view === '3d' && (
@@ -128,10 +132,6 @@ function Workspace({ floor }) {
               <strong id="observerTitle" /><span id="observerTask" />
               <progress id="observerProgress" max="1" value="0" aria-label="Activity progress" />
             </div>
-          </div>
-          <div className="camera-tools">
-            <button id="focusStation" className="focusstation">Station close-up</button>
-            <button id="fit" className="fit">Reset view</button>
           </div>
         </div>
         <motion.div className="scroll" id="two" hidden initial={false}

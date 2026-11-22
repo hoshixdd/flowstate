@@ -1,5 +1,5 @@
-import { Component, lazy, Suspense, useCallback, useState, useSyncExternalStore } from 'react';
-import { floorModel } from './floor-model';
+import { Component, lazy, Suspense, useCallback, useMemo, useState, useSyncExternalStore } from 'react';
+import { firstPeakQueue, floorModel } from './floor-model';
 
 const Scene = lazy(() => import('./FloorScene'));
 
@@ -96,9 +96,13 @@ export function FloorViewport({ floor }) {
   const snapshot = useSyncExternalStore(floor.subscribe, floor.getSnapshot);
   const [mode, setMode] = useState(() => canRender3D() ? '3d' : 'unavailable');
   const onFailure = useCallback(() => setMode('unavailable'), []);
+  const { run, selected } = snapshot;
+  const peak = useMemo(() => run && firstPeakQueue(run.tracks[selected] ?? [],
+    run.config.warmup, run.config.horizon), [run, selected]);
   if (!snapshot.model) return null;
 
   const layout = floorModel(snapshot);
+  const selectedStation = layout.lookup.get(snapshot.selected);
   const showMap = mode !== '3d';
   const map = <FloorMap layout={layout} selected={snapshot.selected} follow={snapshot.follow} floor={floor} />;
   const switchMode = () => {
@@ -118,6 +122,22 @@ export function FloorViewport({ floor }) {
         )}
       </div>
       <div className="floor-mode">
+        {selectedStation && snapshot.run && (
+          <div className="floor-readout">
+            <strong>{selectedStation.node.name}</strong>
+            <span>{['processor', 'inspection'].includes(selectedStation.node.type)
+              ? selectedStation.state.paused ? selectedStation.state.stopReason :
+                `${selectedStation.state.busy} / ${selectedStation.state.capacity} busy · ${selectedStation.state.waiting} waiting`
+              : selectedStation.detail}</span>
+          </div>
+        )}
+        {peak && (
+          <button type="button" className="floor-mode-button peak-replay"
+            title="First replay frame at this station’s highest queue in the observation window"
+            onClick={() => floor.replay({ time: peak.time, stationId: selected })}>
+            Replay peak · {peak.waiting} waiting
+          </button>
+        )}
         <span className="renderer-status" role="status">{mode === 'unavailable' ? '3D unavailable · Floor map' : ''}</span>
         <button type="button" className="floor-mode-button" onClick={switchMode}>
           {mode === '3d' ? 'Floor map' : mode === 'map' ? 'Open 3D floor' : 'Try 3D again'}

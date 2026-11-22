@@ -34,6 +34,10 @@ npm run dev
 
 Open `http://127.0.0.1:4173`. Use `npm run build` for a static deployment from `build/` and `npm run preview` to check that build locally. Set the `PORT` environment variable to use another port.
 
+After running a shift, open **Event review** beside the replay clock. Filter by station, event type, or exact job number, then select a record to pause the floor at its timestamp and inspect the station. Filters and page position are retained until the run is replaced. The log covers the primary replication, including warm-up, and retains up to 50,000 events. Events at the same instant share the resulting floor state.
+
+On the React floor, select a station and choose **Replay peak** to inspect the first visible frame with its largest waiting queue during the observation window. For a separate FIFO buffer, select the buffer. A queue already present at the end of warm-up is included.
+
 Drag the 3D floor to orbit or focus it and use the arrow keys. Use the mouse wheel or the plus and minus keys to zoom. The station chips and inspector select the same equipment as the floor. Switch to **Floor map** for a top-down view of the same replay. Flowstate opens that map automatically if WebGL 2 or the renderer is unavailable. The **2D editor** edits the underlying process layout. Reduced motion disables interface transitions and automatic camera tracking.
 
 For the standalone legacy studio, open `Flowstate.html` or rebuild the offline file:
@@ -89,4 +93,3 @@ In **Fault rules**, choose an observable defect, its source, the operating condi
 **Maintenance** simulates station-wide breakdowns with a seeded Weibull failure age (shape 2), fixed repair times and optional preventive replacement. Age advances during online time, including idle time. Service pauses during downtime and resumes with the remaining work. **Shift review** shows exposed and unexposed counts, equipment stops and the previous run when you apply a change. Each comparison uses the primary run at the configured seed. Use additional replications and workplace observations before estimating real savings.
 
 Examples open directly at `#bakery-study`, `#print-study` and `#laundry-study`. The examples use illustrative times, settings and fault probabilities.
-

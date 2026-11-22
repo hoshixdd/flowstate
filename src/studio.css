@@ -169,3 +169,35 @@ button, a, select { touch-action: manipulation; }
   .stage-toolbar #floorLayer { font-size: 16px; max-width: 100%; }
   :is(.transport #speed, .crew-replay #followWorker) { font-size: 16px; }
 }
+
+/* Keep the instruments legible against both replay renderers. */
+.floor-view { grid-template-rows: minmax(205px, 1fr) auto auto; }
+.floor-mode { position: static; min-height: 45px; padding: 5px 12px; border-top: 1px solid #425a6e; background: #132b3d; }
+.floor-readout { display: flex; align-items: baseline; flex-wrap: wrap; gap: 3px 12px; margin-right: auto; min-width: 0; font-size: 14px; }
+.floor-readout strong { overflow-wrap: anywhere; color: #f5f9fb; }
+.floor-readout span { color: #bbd7e1; font-variant-numeric: tabular-nums; }
+.renderer-status:empty { display: none; }
+.floor-stations { background: #102536; }
+.station-caption strong { font-size: 13px; }
+.station-caption small, .floor-mode-button { font-size: 12px; }
+.stage-toolbar { background: #172f43; }
+header { background: #162b40; }
+@supports (backdrop-filter: blur(8px)) {
+  header { background: rgb(17 36 55 / .96); backdrop-filter: blur(12px); }
+  .stage-toolbar, #observerHud { background: rgb(19 42 59 / .86); backdrop-filter: blur(8px); }
+}
+.workspace .switch { background: #e5edf2; }
+.workspace .switch button { font-size: 13px; }
+.actions #run { color: white; border-color: #174b65; background: #174b65; }
+.actions #run:hover { background: #103c52; }
+@media (max-width: 550px) {
+  .floor-mode { flex-wrap: wrap; padding: 6px 8px; gap: 5px 8px; }
+  .floor-readout { flex: 1 1 120px; }
+  .renderer-status { max-width: 100%; }
+  .transport { flex-wrap: wrap; }
+  .transport #scrub { order: 1; flex-basis: 100%; }
+  .transport #speed { margin-left: auto; }
+}
+.workspace #stage { grid-template-rows: auto minmax(0,1fr); }
+.stage-toolbar .camera-tools { border: 0; background: none; padding: 0; }
+.floor-view { grid-template-rows: minmax(clamp(230px,32vh,360px),1fr) auto auto; }
